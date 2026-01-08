@@ -1,0 +1,1282 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pract.AI - Document Intelligence</title>
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- PDF.js for PDF parsing -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+    <script>pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';</script>
+    
+    <!-- Mammoth.js for .docx parsing -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js"></script>
+    
+    <!-- Marked for Markdown rendering -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/9.1.2/marked.min.js"></script>
+    
+    <!-- DOMPurify for sanitation -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.0.6/purify.min.js"></script>
+
+    <!-- Tesseract.js for OCR -->
+    <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+
+    <!-- Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+        
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f8fafc;
+        }
+
+        /* Branding Colors */
+        :root {
+            --brand-dark: #0f172a; /* Slate 900 */
+            --brand-primary: #4338ca; /* Indigo 700 */
+            --brand-accent: #0f766e; /* Teal 700 */
+            --brand-light: #e0e7ff;
+        }
+
+        .scrollbar-hide::-webkit-scrollbar {
+            display: none;
+        }
+        .scrollbar-hide {
+            -ms-overflow-style: none;
+            scrollbar-width: none;
+        }
+        
+        /* Custom Scrollbar for chat area */
+        .custom-scroll::-webkit-scrollbar {
+            width: 6px;
+        }
+        .custom-scroll::-webkit-scrollbar-track {
+            background: #f1f5f9;
+        }
+        .custom-scroll::-webkit-scrollbar-thumb {
+            background-color: #cbd5e1;
+            border-radius: 20px;
+        }
+
+        .markdown-body p { margin-bottom: 0.75em; }
+        .markdown-body ul { list-style-type: disc; margin-left: 1.5em; margin-bottom: 0.75em; }
+        .markdown-body ol { list-style-type: decimal; margin-left: 1.5em; margin-bottom: 0.75em; }
+        .markdown-body code { background-color: #f1f5f9; padding: 0.2em 0.4em; border-radius: 4px; font-size: 0.9em; }
+        .markdown-body pre { background-color: #1e293b; color: #fff; padding: 1em; border-radius: 8px; overflow-x: auto; margin-bottom: 1em; }
+        .markdown-body pre code { background-color: transparent; color: inherit; padding: 0; }
+        .markdown-body h1, .markdown-body h2, .markdown-body h3 { font-weight: 600; margin-top: 1em; margin-bottom: 0.5em; color: var(--brand-dark); }
+        
+        /* Loading Spinner */
+        .spinner {
+            border: 3px solid rgba(255,255,255,0.3);
+            border-radius: 50%;
+            border-top: 3px solid #4338ca;
+            width: 20px;
+            height: 20px;
+            -webkit-animation: spin 1s linear infinite; /* Safari */
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        /* Typewriter Cursor */
+        .typing-cursor::after {
+            content: '▋';
+            display: inline-block;
+            vertical-align: baseline;
+            animation: blink 1s step-end infinite;
+            color: #4338ca;
+            margin-left: 2px;
+        }
+        @keyframes blink {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0; }
+        }
+    </style>
+</head>
+<body class="h-screen flex overflow-hidden text-slate-800">
+
+    <!-- Sidebar -->
+    <aside class="w-64 bg-slate-900 text-white flex flex-col flex-shrink-0 transition-all duration-300 transform md:translate-x-0 -translate-x-full fixed md:relative z-20 h-full" id="sidebar">
+        <!-- Logo Area -->
+        <div class="p-6 border-b border-slate-800 flex items-center gap-3 select-none">
+            <!-- Constructed Logo based on description/image -->
+            <svg width="32" height="32" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <circle cx="6" cy="6" r="3" fill="#6366f1"/> <!-- Top Left -->
+                <circle cx="16" cy="6" r="3" fill="#6366f1"/>
+                <circle cx="26" cy="6" r="3" fill="#6366f1"/>
+                
+                <circle cx="6" cy="16" r="3" fill="#6366f1"/>
+                <circle cx="16" cy="16" r="3" fill="#0d9488"/> <!-- Center Teal -->
+                <circle cx="26" cy="16" r="3" fill="#6366f1"/>
+                
+                <circle cx="6" cy="26" r="3" fill="#6366f1"/>
+                <circle cx="16" cy="26" r="3" fill="#6366f1"/>
+                <circle cx="26" cy="26" r="3" fill="#6366f1"/>
+            </svg>
+            <div class="text-xl font-bold tracking-tight">
+                <span class="text-white">pract</span><span class="text-teal-400">.ai</span>
+            </div>
+        </div>
+
+        <!-- New Chat Button -->
+        <div class="p-4">
+            <button onclick="createNewChat()" class="w-full flex items-center justify-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white py-3 px-4 rounded-lg font-medium transition-colors shadow-lg shadow-indigo-900/20">
+                <i data-lucide="plus" class="w-4 h-4"></i> New Thread
+            </button>
+        </div>
+
+        <!-- Threads List -->
+        <div class="flex-1 overflow-y-auto custom-scroll px-4 py-2 space-y-2" id="threadsList">
+            <!-- Threads injected here -->
+        </div>
+
+        <!-- Bottom Actions -->
+        <div class="p-4 border-t border-slate-800 bg-slate-900 space-y-2">
+            <button onclick="openSettings()" class="flex items-center gap-2 text-slate-400 hover:text-white text-sm transition-colors w-full p-2 rounded hover:bg-slate-800">
+                <i data-lucide="settings" class="w-4 h-4"></i> Settings & API Key
+            </button>
+            <button onclick="clearDatabase()" class="flex items-center gap-2 text-slate-400 hover:text-red-400 text-sm transition-colors w-full p-2 rounded hover:bg-slate-800">
+                <i data-lucide="trash-2" class="w-4 h-4"></i> Clear All Data
+            </button>
+        </div>
+    </aside>
+
+    <!-- Mobile Overlay -->
+    <div id="mobileOverlay" onclick="toggleSidebar()" class="fixed inset-0 bg-black/50 z-10 hidden md:hidden"></div>
+
+    <!-- Main Content -->
+    <main class="flex-1 flex flex-col h-full bg-slate-50 relative w-full">
+        
+        <!-- Header -->
+        <header class="h-16 bg-white border-b border-slate-200 flex items-center justify-between px-4 md:px-8 shadow-sm z-10">
+            <div class="flex items-center gap-3">
+                <button onclick="toggleSidebar()" class="md:hidden text-slate-600 hover:text-indigo-600">
+                    <i data-lucide="menu" class="w-6 h-6"></i>
+                </button>
+                <h2 id="currentChatTitle" class="text-lg font-semibold text-slate-800 truncate max-w-[200px] md:max-w-md">New Chat</h2>
+            </div>
+            
+            <div class="flex items-center gap-2">
+                <button onclick="exportCurrentThread()" class="text-slate-500 hover:text-indigo-600 p-2 rounded-full hover:bg-slate-100" title="Export Thread">
+                    <i data-lucide="download" class="w-5 h-5"></i>
+                </button>
+                <button onclick="toggleContextPanel()" class="flex items-center gap-2 bg-slate-100 hover:bg-slate-200 text-slate-700 px-3 py-1.5 rounded-full text-sm font-medium transition-colors border border-slate-200">
+                    <i data-lucide="files" class="w-4 h-4"></i>
+                    <span class="hidden sm:inline">Context Files</span>
+                    <span id="fileCountBadge" class="bg-indigo-600 text-white text-xs px-1.5 rounded-full hidden">0</span>
+                </button>
+            </div>
+        </header>
+
+        <!-- Context Panel (Slide over) -->
+        <div id="contextPanel" class="absolute right-0 top-16 bottom-0 w-80 bg-white border-l border-slate-200 shadow-2xl transform translate-x-full transition-transform duration-300 z-30 flex flex-col">
+            <div class="p-4 border-b border-slate-100 flex justify-between items-center bg-slate-50">
+                <h3 class="font-semibold text-slate-700">Context Management</h3>
+                <button onclick="toggleContextPanel()" class="text-slate-400 hover:text-slate-600">
+                    <i data-lucide="x" class="w-5 h-5"></i>
+                </button>
+            </div>
+
+            <!-- Context Meter -->
+            <div class="p-4 border-b border-slate-100">
+                <div class="flex justify-between text-xs font-medium text-slate-500 mb-1">
+                    <span>Context Usage</span>
+                    <span id="tokenCountDisplay">0%</span>
+                </div>
+                <div class="w-full bg-slate-200 rounded-full h-2.5 overflow-hidden">
+                    <div id="contextBar" class="bg-teal-500 h-2.5 rounded-full transition-all duration-500" style="width: 0%"></div>
+                </div>
+                <p id="contextStatus" class="text-xs text-slate-400 mt-1">Ready for uploads</p>
+                <p id="tokenLimitDisplay" class="text-[10px] text-slate-400 mt-1 text-right">Limit: 200k</p>
+            </div>
+
+            <!-- File List -->
+            <div class="flex-1 overflow-y-auto p-4 space-y-3" id="fileList">
+                <!-- Files injected here -->
+                <div class="text-center text-slate-400 py-8 text-sm italic" id="emptyFilesMsg">
+                    No files uploaded yet.
+                </div>
+            </div>
+
+            <!-- Upload Area -->
+            <div class="p-4 bg-slate-50 border-t border-slate-200">
+                <label class="flex flex-col items-center justify-center w-full h-24 border-2 border-slate-300 border-dashed rounded-lg cursor-pointer bg-white hover:bg-slate-50 transition-all" id="dropZone">
+                    <div id="dropZoneIdle" class="flex flex-col items-center justify-center pt-5 pb-6">
+                        <i data-lucide="upload-cloud" class="w-6 h-6 text-slate-400 mb-1"></i>
+                        <p class="text-xs text-slate-500">Drop PDF, DOCX, TXT</p>
+                    </div>
+                    <div id="dropZoneBusy" class="hidden flex-col items-center justify-center pt-5 pb-6">
+                        <div class="spinner border-indigo-500 border-t-transparent mb-2"></div>
+                        <p class="text-xs text-slate-600 font-medium">Processing...</p>
+                    </div>
+                    <input type="file" id="fileInput" class="hidden" multiple accept=".txt,.pdf,.docx,.md,.csv" />
+                </label>
+            </div>
+        </div>
+
+        <!-- Chat Area -->
+        <div class="flex-1 overflow-y-auto custom-scroll p-4 md:p-8 space-y-6" id="chatContainer">
+            <!-- Content Rendered via JS -->
+        </div>
+
+        <!-- Input Area -->
+        <div class="bg-white border-t border-slate-200 p-4">
+            <div class="max-w-4xl mx-auto relative">
+                <form id="chatForm" class="relative flex items-end gap-2 bg-white border border-slate-300 rounded-xl shadow-sm focus-within:ring-2 focus-within:ring-indigo-500 focus-within:border-indigo-500 transition-all p-2">
+                    <textarea 
+                        id="userInput" 
+                        rows="1" 
+                        class="w-full resize-none border-none focus:ring-0 text-slate-700 placeholder-slate-400 py-3 pl-3 max-h-40 custom-scroll bg-transparent"
+                        placeholder="Ask a question about your documents..."
+                        oninput="this.style.height = ''; this.style.height = this.scrollHeight + 'px'"
+                    ></textarea>
+                    <button type="submit" id="sendBtn" class="bg-indigo-600 hover:bg-indigo-700 text-white p-3 rounded-lg disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex-shrink-0">
+                        <i data-lucide="send" class="w-5 h-5"></i>
+                    </button>
+                </form>
+                <div class="text-center mt-2">
+                    <p class="text-xs text-slate-400">Pract.AI uses Gemini Flash API</p>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <!-- Settings Modal -->
+    <div id="settingsModal" class="fixed inset-0 bg-black/50 z-50 hidden flex items-center justify-center p-4 backdrop-blur-sm">
+        <div class="bg-white rounded-xl shadow-2xl w-full max-w-md overflow-hidden transform transition-all scale-100 flex flex-col max-h-[90vh]">
+            <div class="p-6 border-b border-slate-100 flex justify-between items-center bg-slate-50 flex-shrink-0">
+                <h3 class="text-lg font-semibold text-slate-800">Application Settings</h3>
+                <button onclick="closeSettings()" class="text-slate-400 hover:text-slate-600 transition-colors">
+                    <i data-lucide="x" class="w-5 h-5"></i>
+                </button>
+            </div>
+            
+            <div class="p-6 space-y-5 overflow-y-auto custom-scroll flex-1">
+                <!-- API Key Section -->
+                <div>
+                    <label for="apiKeyInput" class="block text-sm font-medium text-slate-700 mb-1">Google Gemini API Key</label>
+                    <p class="text-xs text-slate-500 mb-3">Your API key is stored locally in your browser (IndexedDB).</p>
+                    <div class="relative">
+                        <input type="password" id="apiKeyInput" class="w-full border border-slate-300 rounded-lg px-3 py-2.5 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition-all pr-10" placeholder="Enter AIza..." />
+                        <button onclick="toggleKeyVisibility()" class="absolute right-3 top-3 text-slate-400 hover:text-slate-600">
+                            <i data-lucide="eye" class="w-4 h-4" id="eyeIcon"></i>
+                        </button>
+                    </div>
+                    <div class="mt-2 text-right">
+                         <a href="https://aistudio.google.com/app/apikey" target="_blank" class="text-xs text-indigo-600 hover:text-indigo-800 hover:underline">Get an API key here &rarr;</a>
+                    </div>
+                </div>
+
+                <hr class="border-slate-100">
+
+                <!-- System Instructions / Persona -->
+                <div>
+                    <label for="systemInstructionInput" class="block text-sm font-medium text-slate-700 mb-1">System Instructions (Persona)</label>
+                    <p class="text-xs text-slate-500 mb-2">Define how the AI should behave (e.g., "Act as a strict Legal Analyst").</p>
+                    <textarea id="systemInstructionInput" rows="3" class="w-full border border-slate-300 rounded-lg px-3 py-2.5 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition-all text-sm" placeholder="You are a helpful AI assistant..."></textarea>
+                </div>
+
+                <hr class="border-slate-100">
+
+                <!-- Token Limit Section -->
+                <div>
+                    <div class="flex justify-between items-center mb-1">
+                        <label class="block text-sm font-medium text-slate-700">Context Window Limit</label>
+                        <span id="tokenSliderValue" class="text-xs font-mono bg-slate-100 px-2 py-1 rounded text-slate-600">200,000</span>
+                    </div>
+                    <p class="text-xs text-slate-500 mb-3">Adjust max tokens allowed. <span class="text-red-500 font-medium">Warning:</span> Higher limits may freeze the browser.</p>
+                    
+                    <input type="range" id="tokenSlider" min="50000" max="1000000" step="50000" class="w-full h-2 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-indigo-600" oninput="updateTokenSliderDisplay(this.value)">
+                    
+                    <div class="flex justify-between text-[10px] text-slate-400 mt-1">
+                        <span>50k</span>
+                        <span>1M</span>
+                    </div>
+
+                    <div id="tokenWarning" class="hidden mt-3 bg-amber-50 border border-amber-200 rounded-lg p-3 flex items-start gap-2">
+                        <i data-lucide="alert-triangle" class="w-4 h-4 text-amber-500 mt-0.5 flex-shrink-0"></i>
+                        <p class="text-xs text-amber-700 leading-tight">
+                            <strong>Performance Warning:</strong> Limits above 200k tokens may cause significant lag or crashes when processing large files in the browser.
+                        </p>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="p-4 bg-slate-50 border-t border-slate-100 flex justify-end gap-3 flex-shrink-0">
+                <button onclick="closeSettings()" class="px-4 py-2 text-slate-600 hover:bg-slate-200 rounded-lg text-sm font-medium transition-colors">Cancel</button>
+                <button onclick="saveSettings()" class="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-sm font-medium transition-colors shadow-lg shadow-indigo-500/20">Save Settings</button>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Rename Modal -->
+    <div id="renameModal" class="fixed inset-0 bg-black/50 z-50 hidden flex items-center justify-center p-4 backdrop-blur-sm">
+        <div class="bg-white rounded-xl shadow-2xl w-full max-w-sm overflow-hidden transform transition-all scale-100">
+            <div class="p-4 border-b border-slate-100 flex justify-between items-center bg-slate-50">
+                <h3 class="font-semibold text-slate-800">Rename Chat</h3>
+                <button onclick="closeRenameModal()" class="text-slate-400 hover:text-slate-600">
+                    <i data-lucide="x" class="w-5 h-5"></i>
+                </button>
+            </div>
+            <div class="p-6">
+                <input type="text" id="renameInput" class="w-full border border-slate-300 rounded-lg px-3 py-2.5 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition-all" placeholder="Chat Name" />
+            </div>
+            <div class="p-4 bg-slate-50 border-t border-slate-100 flex justify-end gap-3">
+                <button onclick="closeRenameModal()" class="px-4 py-2 text-slate-600 hover:bg-slate-200 rounded-lg text-sm font-medium transition-colors">Cancel</button>
+                <button onclick="saveRename()" class="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-sm font-medium transition-colors">Save</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Toast Notification -->
+    <div id="toast" class="fixed bottom-4 right-4 bg-slate-800 text-white px-4 py-3 rounded-lg shadow-lg transform translate-y-20 opacity-0 transition-all duration-300 z-50 flex items-center gap-3">
+        <i data-lucide="info" class="w-5 h-5 text-teal-400"></i>
+        <span id="toastMsg" class="text-sm font-medium">Notification</span>
+    </div>
+
+    <!-- Scripts -->
+    <script>
+        // --- CONSTANTS & CONFIG ---
+        const DB_NAME = 'PractAiDB';
+        const DB_VERSION = 4; // Upgraded for scoped thread files
+        const STORE_THREADS = 'threads';
+        const STORE_SETTINGS = 'settings';
+        const STORE_FILES = 'files'; 
+        
+        // --- STATE ---
+        let db = null;
+        let currentThreadId = null;
+        let contextFiles = []; 
+        let totalTokens = 0;
+        let activeApiKey = null;
+        let maxTokensLimit = 200000;
+        let customSystemInstruction = ""; 
+        let isProcessing = false;
+        let renameTargetId = null; // Track which thread is being renamed
+
+        // --- INITIALIZATION ---
+        document.addEventListener('DOMContentLoaded', async () => {
+            lucide.createIcons();
+            try {
+                await initDB();
+                await loadSettings(); 
+                // Don't load global files here anymore, will load per chat
+                refreshSidebar();
+                setupEventListeners();
+                
+                const threads = await getAllThreads();
+                if (threads.length === 0) {
+                    createNewChat();
+                } else {
+                    loadChat(threads[0].id);
+                }
+            } catch (err) {
+                console.error("Initialization Error:", err);
+                showToast("Failed to initialize database", true);
+            }
+        });
+
+        // --- INDEXEDDB HELPERS ---
+        function initDB() {
+            return new Promise((resolve, reject) => {
+                const request = indexedDB.open(DB_NAME, DB_VERSION);
+                request.onerror = event => { console.error("DB Error", event); reject('DB Error'); };
+                request.onupgradeneeded = event => {
+                    const db = event.target.result;
+                    const txn = event.target.transaction;
+
+                    if (!db.objectStoreNames.contains(STORE_THREADS)) {
+                        const store = db.createObjectStore(STORE_THREADS, { keyPath: 'id' });
+                        store.createIndex('updatedAt', 'updatedAt', { unique: false });
+                    }
+                    if (!db.objectStoreNames.contains(STORE_SETTINGS)) {
+                        db.createObjectStore(STORE_SETTINGS, { keyPath: 'id' });
+                    }
+                    
+                    let fileStore;
+                    if (!db.objectStoreNames.contains(STORE_FILES)) {
+                        fileStore = db.createObjectStore(STORE_FILES, { keyPath: 'id' });
+                    } else {
+                        fileStore = txn.objectStore(STORE_FILES);
+                    }
+                    
+                    if (!fileStore.indexNames.contains('threadId')) {
+                        fileStore.createIndex('threadId', 'threadId', { unique: false });
+                    }
+                };
+                request.onsuccess = event => { db = event.target.result; resolve(db); };
+            });
+        }
+
+        // Generic DB Wrappers
+        function dbOp(storeName, mode, callback) {
+            return new Promise((resolve, reject) => {
+                const transaction = db.transaction([storeName], mode);
+                const store = transaction.objectStore(storeName);
+                const request = callback(store);
+                request.onsuccess = () => resolve(request.result);
+                request.onerror = () => reject(request.error);
+            });
+        }
+
+        // --- DATA ACCESS ---
+
+        // Threads
+        const saveThread = (thread) => dbOp(STORE_THREADS, 'readwrite', store => store.put(thread));
+        const getThread = (id) => dbOp(STORE_THREADS, 'readonly', store => store.get(id));
+        const deleteThread = (id) => dbOp(STORE_THREADS, 'readwrite', store => store.delete(id));
+        
+        function getAllThreads() {
+            return new Promise((resolve, reject) => {
+                const transaction = db.transaction([STORE_THREADS], 'readonly');
+                const store = transaction.objectStore(STORE_THREADS);
+                const index = store.index('updatedAt');
+                const request = index.openCursor(null, 'prev');
+                const results = [];
+                request.onsuccess = (event) => {
+                    const cursor = event.target.result;
+                    if (cursor) { results.push(cursor.value); cursor.continue(); } 
+                    else { resolve(results); }
+                };
+                request.onerror = () => reject();
+            });
+        }
+
+        // Settings
+        const saveSetting = (id, value) => dbOp(STORE_SETTINGS, 'readwrite', store => store.put({ id, value }));
+        const getSetting = (id) => dbOp(STORE_SETTINGS, 'readonly', store => store.get(id)).then(res => res ? res.value : null);
+
+        // Files (Persistent)
+        const saveFileToDB = (fileObj) => dbOp(STORE_FILES, 'readwrite', store => store.put(fileObj));
+        const removeFileFromDB = (id) => dbOp(STORE_FILES, 'readwrite', store => store.delete(id));
+        
+        function getFilesForThread(threadId) {
+            return new Promise((resolve, reject) => {
+                const transaction = db.transaction([STORE_FILES], 'readonly');
+                const store = transaction.objectStore(STORE_FILES);
+                const index = store.index('threadId');
+                const request = index.getAll(threadId);
+                request.onsuccess = () => resolve(request.result || []);
+                request.onerror = () => reject();
+            });
+        }
+
+        async function clearDatabase() {
+            if(!confirm("Are you sure you want to delete all chat history and files? (API Key will be preserved)")) return;
+            
+            // 1. Preserve API Key
+            const savedKey = await getSetting('apiKey');
+            
+            // 2. Clear Stores
+            const transaction = db.transaction([STORE_THREADS, STORE_SETTINGS, STORE_FILES], 'readwrite');
+            transaction.objectStore(STORE_THREADS).clear();
+            transaction.objectStore(STORE_SETTINGS).clear();
+            transaction.objectStore(STORE_FILES).clear();
+            
+            transaction.oncomplete = async () => {
+                // 3. Restore API Key if it existed
+                if(savedKey) {
+                    await saveSetting('apiKey', savedKey);
+                }
+                showToast("Data cleared (API Key preserved)");
+                setTimeout(() => window.location.reload(), 1500);
+            };
+        }
+
+        // --- SETTINGS UI LOGIC ---
+
+        async function loadSettings() {
+            const key = await getSetting('apiKey');
+            if (!key) openSettings(true);
+            else activeApiKey = key;
+
+            const limit = await getSetting('maxTokens');
+            if (limit) maxTokensLimit = parseInt(limit, 10);
+
+            const instruction = await getSetting('systemInstruction');
+            if (instruction) customSystemInstruction = instruction;
+        }
+
+        async function loadFilesFromDB(threadId) {
+            if (!threadId) {
+                contextFiles = [];
+            } else {
+                contextFiles = await getFilesForThread(threadId);
+            }
+            updateContextMeter();
+            
+            const list = document.getElementById('fileList');
+            list.innerHTML = '';
+            if (contextFiles.length > 0) {
+                document.getElementById('emptyFilesMsg')?.remove();
+                contextFiles.forEach(f => renderFileItem(f));
+            } else {
+                 list.innerHTML = `<div class="text-center text-slate-400 py-8 text-sm italic" id="emptyFilesMsg">No files uploaded yet.</div>`;
+            }
+        }
+
+        function openSettings(force = false) {
+            const modal = document.getElementById('settingsModal');
+            modal.classList.remove('hidden');
+            
+            getSetting('apiKey').then(key => { if(key) document.getElementById('apiKeyInput').value = key; });
+            document.getElementById('tokenSlider').value = maxTokensLimit;
+            updateTokenSliderDisplay(maxTokensLimit);
+            document.getElementById('systemInstructionInput').value = customSystemInstruction;
+        }
+
+        function closeSettings() {
+            if (!activeApiKey && !confirm("An API Key is required. Close without saving?")) return;
+            document.getElementById('settingsModal').classList.add('hidden');
+        }
+
+        async function saveSettings() {
+            const input = document.getElementById('apiKeyInput');
+            const key = input.value.trim();
+            const slider = document.getElementById('tokenSlider');
+            const newLimit = parseInt(slider.value, 10);
+            const instruction = document.getElementById('systemInstructionInput').value.trim();
+            
+            if (!key) {
+                showToast("Please enter a valid API Key", true);
+                return;
+            }
+            
+            await saveSetting('apiKey', key);
+            await saveSetting('maxTokens', newLimit);
+            await saveSetting('systemInstruction', instruction);
+            
+            activeApiKey = key;
+            maxTokensLimit = newLimit;
+            customSystemInstruction = instruction;
+            
+            updateContextMeter();
+            showToast("Settings saved");
+            document.getElementById('settingsModal').classList.add('hidden');
+        }
+        
+        function toggleKeyVisibility() {
+            const input = document.getElementById('apiKeyInput');
+            const icon = document.getElementById('eyeIcon');
+            if (input.type === 'password') {
+                input.type = 'text';
+                icon.setAttribute('data-lucide', 'eye-off');
+            } else {
+                input.type = 'password';
+                icon.setAttribute('data-lucide', 'eye');
+            }
+            lucide.createIcons();
+        }
+
+        function updateTokenSliderDisplay(val) {
+            const display = document.getElementById('tokenSliderValue');
+            const warning = document.getElementById('tokenWarning');
+            const numVal = parseInt(val, 10);
+            display.textContent = numVal.toLocaleString();
+            numVal > 200000 ? warning.classList.remove('hidden') : warning.classList.add('hidden');
+        }
+
+        // --- RENAME CHAT LOGIC ---
+
+        function openRenameModal(e, id) {
+            e.stopPropagation();
+            renameTargetId = id;
+            getThread(id).then(t => {
+                if(t) {
+                    document.getElementById('renameInput').value = t.title;
+                    document.getElementById('renameModal').classList.remove('hidden');
+                }
+            });
+        }
+
+        function closeRenameModal() {
+            document.getElementById('renameModal').classList.add('hidden');
+            renameTargetId = null;
+        }
+
+        async function saveRename() {
+            if(!renameTargetId) return;
+            const newName = document.getElementById('renameInput').value.trim();
+            if(!newName) return;
+
+            const thread = await getThread(renameTargetId);
+            if(thread) {
+                thread.title = newName;
+                await saveThread(thread);
+                
+                // Update UI if current
+                if(currentThreadId === renameTargetId) {
+                    document.getElementById('currentChatTitle').textContent = newName;
+                }
+                refreshSidebar();
+                closeRenameModal();
+                showToast("Chat renamed");
+            }
+        }
+
+        // --- CORE LOGIC: CHAT & CONTEXT ---
+
+        async function createNewChat() {
+            const id = crypto.randomUUID();
+            const thread = {
+                id: id,
+                title: 'New Conversation',
+                messages: [],
+                createdAt: Date.now(),
+                updatedAt: Date.now()
+            };
+            await saveThread(thread);
+            loadChat(id);
+            refreshSidebar();
+            if (window.innerWidth < 768) {
+                document.getElementById('sidebar').classList.add('-translate-x-full');
+                document.getElementById('mobileOverlay').classList.add('hidden');
+            }
+        }
+
+        async function loadChat(id) {
+            currentThreadId = id;
+            const thread = await getThread(id);
+            if (!thread) return;
+
+            document.getElementById('currentChatTitle').textContent = thread.title;
+            const container = document.getElementById('chatContainer');
+            container.innerHTML = ''; 
+
+            // Update Context for this specific thread
+            await loadFilesFromDB(id);
+
+            if (thread.messages.length === 0) {
+                renderWelcomeScreen();
+            } else {
+                thread.messages.forEach(msg => renderMessage(msg));
+                scrollToBottom();
+            }
+
+            document.querySelectorAll('#threadsList > div').forEach(el => {
+                el.classList.remove('bg-slate-800', 'border-l-4', 'border-indigo-500');
+                if (el.dataset.id === id) el.classList.add('bg-slate-800', 'border-l-4', 'border-indigo-500');
+            });
+        }
+
+        async function handleSendMessage(e) {
+            e.preventDefault();
+            
+            if (!activeApiKey) {
+                openSettings(true);
+                showToast("Please set your API Key first", true);
+                return;
+            }
+
+            const input = document.getElementById('userInput');
+            const text = input.value.trim();
+            if (!text) return;
+
+            input.value = '';
+            input.style.height = 'auto';
+
+            const welcome = document.getElementById('welcomeScreen');
+            if (welcome) welcome.remove();
+
+            // 1. User Message
+            const userMsg = { role: 'user', content: text, timestamp: Date.now() };
+            renderMessage(userMsg);
+            await appendToThread(userMsg);
+            scrollToBottom();
+
+            // 2. AI Loading State
+            const loadingId = 'loading-' + Date.now();
+            renderLoading(loadingId);
+            scrollToBottom();
+
+            // 3. Construct Prompt
+            const contextString = contextFiles.map(f => `--- FILE: ${f.name} ---\n${f.content}\n--- END FILE ---`).join('\n\n');
+            
+            const baseInstruction = customSystemInstruction || "You are a helpful AI assistant for Pract.AI. Answer the user's questions based primarily on these documents. If the answer is not in the documents, rely on your general knowledge but mention that it wasn't in the files.";
+            
+            const systemPrompt = `${baseInstruction}
+            
+            CONTEXT DOCUMENTS:
+            ${contextString ? contextString : "No documents uploaded yet."}`;
+
+            try {
+                const responseText = await callGeminiAPI(text, systemPrompt);
+                document.getElementById(loadingId).remove();
+                
+                const msgId = 'msg-' + Date.now();
+                const botMsgContainer = createMessageContainer(msgId, 'model'); 
+                
+                await typeWriterEffect(botMsgContainer, responseText);
+
+                const botMsg = { role: 'model', content: responseText, timestamp: Date.now() };
+                await appendToThread(botMsg);
+                
+                const thread = await getThread(currentThreadId);
+                if (thread.messages.length <= 2) {
+                    thread.title = text.substring(0, 30) + (text.length > 30 ? '...' : '');
+                    await saveThread(thread);
+                    document.getElementById('currentChatTitle').textContent = thread.title;
+                    refreshSidebar();
+                }
+
+            } catch (error) {
+                document.getElementById(loadingId).remove();
+                renderMessage({ role: 'system', content: "Error generating response: " + error.message });
+            }
+        }
+
+        async function appendToThread(msg) {
+            const thread = await getThread(currentThreadId);
+            thread.messages.push(msg);
+            thread.updatedAt = Date.now();
+            await saveThread(thread);
+            refreshSidebar();
+        }
+
+        async function callGeminiAPI(userQuery, systemInstruction) {
+            const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${activeApiKey}`;
+            
+            const payload = {
+                contents: [{ parts: [{ text: userQuery }] }],
+                systemInstruction: { parts: [{ text: systemInstruction }] }
+            };
+
+            let retryCount = 0;
+            const maxRetries = 3;
+            
+            while (retryCount <= maxRetries) {
+                try {
+                    const response = await fetch(url, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(payload)
+                    });
+
+                    if (!response.ok) {
+                        // Attempt to extract the specific error message from Google
+                        let errorDetails = `Status ${response.status}`;
+                        try {
+                            const errorBody = await response.json();
+                            if (errorBody.error && errorBody.error.message) {
+                                errorDetails = errorBody.error.message;
+                            }
+                        } catch (parseErr) {
+                            // If JSON parsing fails, use status text
+                            errorDetails = response.statusText || errorDetails;
+                        }
+                        throw new Error(`API Error: ${errorDetails}`);
+                    }
+                    
+                    const data = await response.json();
+                    return data.candidates?.[0]?.content?.parts?.[0]?.text || "I couldn't generate a response.";
+                } catch (e) {
+                    console.error("Gemini API Attempt Failed:", e);
+                    
+                    // Do not retry for Client Errors (400-499) as they won't resolve with retries
+                    // e.g. 400 Bad Request, 429 Quota Exceeded, 413 Payload Too Large
+                    const isClientError = e.message.includes('400') || e.message.includes('429') || e.message.includes('413') || e.message.includes('INVALID_ARGUMENT');
+                    
+                    if (isClientError || retryCount >= maxRetries) {
+                        throw e;
+                    }
+                    
+                    retryCount++;
+                    await new Promise(r => setTimeout(r, 1000 * Math.pow(2, retryCount)));
+                }
+            }
+        }
+
+        // --- TYPEWRITER EFFECT ---
+        
+        function createMessageContainer(id, role) {
+            const container = document.getElementById('chatContainer');
+            const div = document.createElement('div');
+            const isUser = role === 'user';
+            
+            div.className = `flex w-full mb-6 ${isUser ? 'justify-end' : 'justify-start'}`;
+            
+            div.innerHTML = `
+                <div class="flex max-w-[85%] md:max-w-[75%] gap-3 ${isUser ? 'flex-row-reverse' : 'flex-row'}">
+                    <div class="w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 ${isUser ? 'bg-indigo-600 text-white' : 'bg-teal-600 text-white'}">
+                        ${isUser ? '<i data-lucide="user" class="w-5 h-5"></i>' : '<i data-lucide="bot" class="w-5 h-5"></i>'}
+                    </div>
+                    <div class="flex flex-col gap-1 ${isUser ? 'items-end' : 'items-start'} min-w-0">
+                        <div id="${id}-content" class="px-5 py-3.5 rounded-2xl shadow-sm text-sm leading-relaxed overflow-hidden ${isUser ? 'bg-indigo-600 text-white rounded-tr-none' : 'bg-white border border-slate-200 text-slate-700 markdown-body rounded-tl-none typing-cursor'}">
+                        </div>
+                        <div class="flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                             <button onclick="copyText(this)" class="text-xs text-slate-400 hover:text-indigo-600 flex items-center gap-1">
+                                <i data-lucide="copy" class="w-3 h-3"></i> Copy
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            `;
+            
+            div.addEventListener('mouseenter', () => div.querySelector('.opacity-0').classList.remove('opacity-0'));
+            div.addEventListener('mouseleave', () => div.querySelector('.flex.gap-2').classList.add('opacity-0'));
+            
+            container.appendChild(div);
+            lucide.createIcons();
+            return document.getElementById(`${id}-content`);
+        }
+
+        async function typeWriterEffect(element, text) {
+            const words = text.split(/(\s+)/); 
+            
+            for (let i = 0; i < words.length; i++) {
+                element.innerText += words[i];
+                scrollToBottom();
+                const delay = words[i].length > 1 ? 15 : 5; 
+                await new Promise(r => setTimeout(r, delay));
+            }
+            
+            element.classList.remove('typing-cursor');
+            element.innerHTML = marked.parse(text);
+            element.innerHTML = DOMPurify.sanitize(element.innerHTML);
+            scrollToBottom();
+        }
+
+        // --- UI RENDERERS ---
+
+        function renderWelcomeScreen() {
+            const container = document.getElementById('chatContainer');
+            const div = document.createElement('div');
+            div.id = 'welcomeScreen';
+            div.className = 'flex flex-col items-center justify-center h-full text-center space-y-4 opacity-70';
+            div.innerHTML = `
+                <div class="w-16 h-16 bg-indigo-100 rounded-2xl flex items-center justify-center text-indigo-600 mb-2">
+                    <i data-lucide="bot" class="w-8 h-8"></i>
+                </div>
+                <h1 class="text-2xl font-bold text-slate-800">CAG Workspace</h1>
+                <p class="text-slate-500 max-w-md">
+                    Upload documents to the context panel and ask questions. 
+                    Your chats and files are saved automatically to your browser.
+                </p>
+                <button onclick="openSettings()" class="mt-4 px-4 py-2 bg-white border border-slate-300 rounded-lg text-sm text-slate-600 hover:bg-slate-50 transition-colors shadow-sm">
+                    Configure API Key
+                </button>
+            `;
+            container.appendChild(div);
+            lucide.createIcons();
+        }
+
+        function renderMessage(msg) {
+            const container = document.getElementById('chatContainer');
+            const div = document.createElement('div');
+            const isUser = msg.role === 'user';
+            const isSystem = msg.role === 'system';
+            
+            div.className = `flex w-full mb-6 ${isUser ? 'justify-end' : 'justify-start'}`;
+            
+            if (isSystem) {
+                div.innerHTML = `
+                    <div class="bg-red-50 text-red-600 px-4 py-2 rounded-lg text-sm border border-red-100">
+                        <i data-lucide="alert-circle" class="inline w-4 h-4 mr-1"></i> ${msg.content}
+                    </div>
+                `;
+            } else {
+                const contentHtml = isUser ? `<p>${escapeHtml(msg.content)}</p>` : marked.parse(msg.content);
+                const sanitizedHtml = isUser ? contentHtml : DOMPurify.sanitize(contentHtml);
+
+                div.innerHTML = `
+                    <div class="flex max-w-[85%] md:max-w-[75%] gap-3 ${isUser ? 'flex-row-reverse' : 'flex-row'}">
+                        <div class="w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 ${isUser ? 'bg-indigo-600 text-white' : 'bg-teal-600 text-white'}">
+                            ${isUser ? '<i data-lucide="user" class="w-5 h-5"></i>' : '<i data-lucide="bot" class="w-5 h-5"></i>'}
+                        </div>
+                        <div class="flex flex-col gap-1 ${isUser ? 'items-end' : 'items-start'} min-w-0">
+                            <div class="px-5 py-3.5 rounded-2xl shadow-sm text-sm leading-relaxed overflow-hidden ${isUser ? 'bg-indigo-600 text-white rounded-tr-none' : 'bg-white border border-slate-200 text-slate-700 markdown-body rounded-tl-none'}">
+                                ${sanitizedHtml}
+                            </div>
+                            <div class="flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                                <button onclick="copyText(this)" class="text-xs text-slate-400 hover:text-indigo-600 flex items-center gap-1">
+                                    <i data-lucide="copy" class="w-3 h-3"></i> Copy
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                `;
+                div.addEventListener('mouseenter', () => div.querySelector('.opacity-0').classList.remove('opacity-0'));
+                div.addEventListener('mouseleave', () => div.querySelector('.flex.gap-2').classList.add('opacity-0'));
+            }
+            
+            container.appendChild(div);
+            lucide.createIcons();
+        }
+
+        function renderLoading(id) {
+            const container = document.getElementById('chatContainer');
+            const div = document.createElement('div');
+            div.id = id;
+            div.className = `flex w-full mb-6 justify-start`;
+            div.innerHTML = `
+                <div class="flex max-w-[75%] gap-3">
+                    <div class="w-8 h-8 rounded-full bg-teal-600 text-white flex items-center justify-center flex-shrink-0">
+                        <i data-lucide="bot" class="w-5 h-5 animate-pulse"></i>
+                    </div>
+                    <div class="bg-white border border-slate-200 px-5 py-4 rounded-2xl rounded-tl-none shadow-sm flex items-center gap-1">
+                        <div class="w-2 h-2 bg-slate-400 rounded-full animate-bounce" style="animation-delay: 0ms"></div>
+                        <div class="w-2 h-2 bg-slate-400 rounded-full animate-bounce" style="animation-delay: 150ms"></div>
+                        <div class="w-2 h-2 bg-slate-400 rounded-full animate-bounce" style="animation-delay: 300ms"></div>
+                    </div>
+                </div>
+            `;
+            container.appendChild(div);
+            lucide.createIcons();
+        }
+
+        async function refreshSidebar() {
+            const list = document.getElementById('threadsList');
+            list.innerHTML = '';
+            const threads = await getAllThreads();
+            
+            threads.forEach(t => {
+                const el = document.createElement('div');
+                el.dataset.id = t.id;
+                const isCurrent = t.id === currentThreadId;
+                
+                el.className = `p-3 rounded-lg cursor-pointer mb-1 transition-colors group relative ${isCurrent ? 'bg-slate-800 border-l-4 border-indigo-500' : 'hover:bg-slate-800 text-slate-300'}`;
+                el.onclick = () => {
+                    loadChat(t.id);
+                    if (window.innerWidth < 768) toggleSidebar();
+                };
+
+                el.innerHTML = `
+                    <div class="font-medium text-sm truncate pr-12">${escapeHtml(t.title)}</div>
+                    <div class="text-xs text-slate-500 mt-1">${new Date(t.updatedAt).toLocaleDateString()}</div>
+                    <div class="absolute right-2 top-3 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                         <button onclick="openRenameModal(event, '${t.id}')" class="text-slate-500 hover:text-indigo-400 p-1">
+                            <i data-lucide="pencil" class="w-4 h-4"></i>
+                        </button>
+                        <button onclick="deleteChat(event, '${t.id}')" class="text-slate-500 hover:text-red-400 p-1">
+                            <i data-lucide="trash" class="w-4 h-4"></i>
+                        </button>
+                    </div>
+                `;
+                list.appendChild(el);
+            });
+            lucide.createIcons();
+        }
+
+        async function deleteChat(e, id) {
+            e.stopPropagation();
+            if (!confirm('Delete this thread?')) return;
+            await deleteThread(id);
+            const threads = await getAllThreads();
+            if (threads.length === 0) createNewChat();
+            else if (id === currentThreadId) loadChat(threads[0].id);
+            refreshSidebar();
+        }
+
+        // --- FILE HANDLING & CONTEXT ---
+
+        function setupEventListeners() {
+            document.getElementById('chatForm').addEventListener('submit', handleSendMessage);
+            const dropZone = document.getElementById('dropZone');
+            const fileInput = document.getElementById('fileInput');
+
+            dropZone.addEventListener('dragover', (e) => {
+                e.preventDefault();
+                if(!isProcessing) dropZone.classList.add('border-indigo-500', 'bg-indigo-50');
+            });
+            dropZone.addEventListener('dragleave', () => {
+                if(!isProcessing) dropZone.classList.remove('border-indigo-500', 'bg-indigo-50');
+            });
+            dropZone.addEventListener('drop', (e) => {
+                e.preventDefault();
+                if(isProcessing) return;
+                dropZone.classList.remove('border-indigo-500', 'bg-indigo-50');
+                handleFiles(e.dataTransfer.files);
+            });
+            dropZone.addEventListener('click', () => { if(!isProcessing) fileInput.click(); });
+            fileInput.addEventListener('change', () => { if(!isProcessing) handleFiles(fileInput.files); });
+        }
+        
+        function updateProcessingUI(busy) {
+            const dropZone = document.getElementById('dropZone');
+            const idle = document.getElementById('dropZoneIdle');
+            const busyDiv = document.getElementById('dropZoneBusy');
+            if(busy) {
+                dropZone.classList.add('bg-slate-100', 'cursor-wait');
+                dropZone.classList.remove('cursor-pointer', 'hover:bg-slate-50', 'bg-white');
+                idle.classList.add('hidden');
+                busyDiv.classList.remove('hidden');
+                busyDiv.classList.add('flex');
+            } else {
+                dropZone.classList.remove('bg-slate-100', 'cursor-wait');
+                dropZone.classList.add('cursor-pointer', 'hover:bg-slate-50', 'bg-white');
+                idle.classList.remove('hidden');
+                busyDiv.classList.add('hidden');
+                busyDiv.classList.remove('flex');
+            }
+        }
+
+        async function handleFiles(files) {
+            if (isProcessing) return;
+            isProcessing = true;
+            updateProcessingUI(true);
+            const list = document.getElementById('fileList');
+            document.getElementById('emptyFilesMsg')?.remove();
+            
+            for (let file of files) {
+                if (contextFiles.some(f => f.name === file.name)) {
+                    showToast(`"${file.name}" is already uploaded.`);
+                    continue;
+                }
+                if (totalTokens >= maxTokensLimit) {
+                    showToast("Context limit reached.", true, 4000);
+                    break;
+                }
+                
+                showToast(`Processing ${file.name}...`);
+                await new Promise(r => setTimeout(r, 50));
+                
+                try {
+                    const content = await extractText(file);
+                    const tokens = estimateTokens(content);
+                    if (totalTokens + tokens > maxTokensLimit) {
+                        showToast(`File "${file.name}" is too large.`, true, 5000);
+                        continue;
+                    }
+
+                    const fileObj = {
+                        id: crypto.randomUUID(),
+                        threadId: currentThreadId, // SCOPE TO THREAD
+                        name: file.name,
+                        type: file.type,
+                        content: content,
+                        tokens: tokens,
+                        timestamp: Date.now()
+                    };
+
+                    contextFiles.push(fileObj);
+                    await saveFileToDB(fileObj); 
+                    
+                    updateContextMeter();
+                    renderFileItem(fileObj);
+                    showToast(`Added ${file.name}`);
+                } catch (err) {
+                    console.error(err);
+                    showToast(`Error reading ${file.name}: ${err.message}`, true);
+                }
+            }
+            isProcessing = false;
+            updateProcessingUI(false);
+        }
+
+        function extractText(file) {
+            return new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                if (file.type === 'application/pdf') {
+                    reader.onload = async function() {
+                        const typedarray = new Uint8Array(this.result);
+                        try {
+                            const pdf = await pdfjsLib.getDocument(typedarray).promise;
+                            let text = '';
+                            
+                            // Iterate pages
+                            for (let i = 1; i <= pdf.numPages; i++) {
+                                const page = await pdf.getPage(i);
+                                const content = await page.getTextContent();
+                                let pageText = content.items.map(item => item.str).join(' ');
+                                
+                                // OCR Check: If page is mostly empty, treat as image
+                                if (pageText.trim().length < 20) {
+                                    showToast(`Page ${i}/${pdf.numPages} appears to be an image. Running OCR...`, false, 4000);
+                                    
+                                    // Render to Canvas
+                                    const viewport = page.getViewport({ scale: 2.0 });
+                                    const canvas = document.createElement('canvas');
+                                    canvas.width = viewport.width;
+                                    canvas.height = viewport.height;
+                                    const ctx = canvas.getContext('2d');
+                                    await page.render({ canvasContext: ctx, viewport: viewport }).promise;
+                                    
+                                    // Run Tesseract
+                                    try {
+                                        const result = await Tesseract.recognize(canvas, 'eng');
+                                        pageText = result.data.text;
+                                    } catch (ocrErr) {
+                                        console.warn("OCR Failed", ocrErr);
+                                        pageText = "[OCR Failed for Page " + i + "]";
+                                    }
+                                }
+                                
+                                text += pageText + '\n';
+                            }
+                            resolve(text);
+                        } catch (e) { reject(e); }
+                    };
+                    reader.readAsArrayBuffer(file);
+                } else if (file.type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') {
+                    reader.onload = function(e) {
+                        mammoth.extractRawText({ arrayBuffer: e.target.result })
+                            .then(result => resolve(result.value))
+                            .catch(reject);
+                    };
+                    reader.readAsArrayBuffer(file);
+                } else {
+                    reader.onload = (e) => resolve(e.target.result);
+                    reader.readAsText(file);
+                }
+            });
+        }
+
+        function estimateTokens(text) {
+            return Math.ceil(text.length / 4);
+        }
+
+        function updateContextMeter() {
+            totalTokens = contextFiles.reduce((acc, f) => acc + f.tokens, 0);
+            const percentage = Math.min((totalTokens / maxTokensLimit) * 100, 100);
+            
+            const bar = document.getElementById('contextBar');
+            const txt = document.getElementById('tokenCountDisplay');
+            const status = document.getElementById('contextStatus');
+            const badge = document.getElementById('fileCountBadge');
+            const limitDisplay = document.getElementById('tokenLimitDisplay');
+
+            bar.style.width = `${percentage}%`;
+            txt.textContent = `${Math.round(percentage)}%`;
+            limitDisplay.textContent = `Limit: ${maxTokensLimit.toLocaleString()}`;
+            
+            if (percentage > 90) bar.className = "h-2.5 rounded-full transition-all duration-500 bg-red-500";
+            else if (percentage > 70) bar.className = "h-2.5 rounded-full transition-all duration-500 bg-yellow-500";
+            else bar.className = "h-2.5 rounded-full transition-all duration-500 bg-teal-500";
+
+            if (percentage >= 100) status.textContent = "Context Full";
+            else status.textContent = `${contextFiles.length} files loaded`;
+
+            badge.textContent = contextFiles.length;
+            badge.style.display = contextFiles.length > 0 ? 'inline-block' : 'none';
+        }
+
+        function renderFileItem(file) {
+            const list = document.getElementById('fileList');
+            const el = document.createElement('div');
+            el.className = "flex items-center justify-between bg-white border border-slate-200 p-3 rounded-lg shadow-sm";
+            el.innerHTML = `
+                <div class="flex items-center gap-3 overflow-hidden">
+                    <div class="bg-indigo-50 p-2 rounded text-indigo-600">
+                        <i data-lucide="${getFileIcon(file.name)}" class="w-4 h-4"></i>
+                    </div>
+                    <div class="min-w-0">
+                        <p class="text-sm font-medium text-slate-700 truncate">${escapeHtml(file.name)}</p>
+                        <p class="text-xs text-slate-400">~${file.tokens} tokens</p>
+                    </div>
+                </div>
+                <button onclick="removeFile('${file.id}', this)" class="text-slate-400 hover:text-red-500 p-1">
+                    <i data-lucide="trash-2" class="w-4 h-4"></i>
+                </button>
+            `;
+            list.appendChild(el);
+            lucide.createIcons();
+        }
+
+        async function removeFile(id, btnElement) {
+            contextFiles = contextFiles.filter(f => f.id !== id);
+            await removeFileFromDB(id); 
+            
+            btnElement.closest('div.flex').remove();
+            updateContextMeter();
+            if (contextFiles.length === 0) {
+                document.getElementById('fileList').innerHTML = `<div class="text-center text-slate-400 py-8 text-sm italic" id="emptyFilesMsg">No files uploaded yet.</div>`;
+            }
+        }
+
+        // --- UTILS ---
+
+        function toggleSidebar() {
+            const sidebar = document.getElementById('sidebar');
+            const overlay = document.getElementById('mobileOverlay');
+            if (sidebar.classList.contains('-translate-x-full')) {
+                sidebar.classList.remove('-translate-x-full');
+                overlay.classList.remove('hidden');
+            } else {
+                sidebar.classList.add('-translate-x-full');
+                overlay.classList.add('hidden');
+            }
+        }
+
+        function toggleContextPanel() {
+            const panel = document.getElementById('contextPanel');
+            if (panel.classList.contains('translate-x-full')) {
+                panel.classList.remove('translate-x-full');
+            } else {
+                panel.classList.add('translate-x-full');
+            }
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        function getFileIcon(filename) {
+            if (filename.endsWith('.pdf')) return 'file-text';
+            if (filename.endsWith('.docx') || filename.endsWith('.doc')) return 'file-type-2';
+            return 'file';
+        }
+
+        function scrollToBottom() {
+            const container = document.getElementById('chatContainer');
+            container.scrollTop = container.scrollHeight;
+        }
+
+        function copyText(btn) {
+            const contentDiv = btn.closest('.flex-col').querySelector('.markdown-body');
+            const text = contentDiv.innerText;
+            const textArea = document.createElement("textarea");
+            textArea.value = text;
+            document.body.appendChild(textArea);
+            textArea.select();
+            document.execCommand('copy');
+            document.body.removeChild(textArea);
+            const originalHTML = btn.innerHTML;
+            btn.innerHTML = `<i data-lucide="check" class="w-3 h-3"></i> Copied`;
+            setTimeout(() => btn.innerHTML = originalHTML, 2000);
+            lucide.createIcons();
+        }
+
+        async function exportCurrentThread() {
+            const thread = await getThread(currentThreadId);
+            if (!thread || thread.messages.length === 0) {
+                showToast("No messages to export", true);
+                return;
+            }
+            let text = `Pract.AI Thread: ${thread.title}\nDate: ${new Date(thread.updatedAt).toLocaleString()}\n\n`;
+            text += `------------------------------------------------\n\n`;
+            thread.messages.forEach(m => {
+                text += `[${m.role.toUpperCase()}] - ${new Date(m.timestamp).toLocaleTimeString()}\n`;
+                text += `${m.content}\n\n`;
+            });
+            const blob = new Blob([text], { type: 'text/plain' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `pract-ai-chat-${new Date().toISOString().slice(0,10)}.txt`;
+            a.click();
+            URL.revokeObjectURL(url);
+            showToast("Thread exported");
+        }
+
+        function showToast(msg, isError = false, duration = 3000) {
+            const toast = document.getElementById('toast');
+            const toastMsg = document.getElementById('toastMsg');
+            toastMsg.textContent = msg;
+            toast.className = `fixed bottom-4 right-4 px-4 py-3 rounded-lg shadow-lg transform transition-all duration-300 z-50 flex items-center gap-3 ${isError ? 'bg-red-600 text-white' : 'bg-slate-800 text-white'}`;
+            toast.classList.remove('translate-y-20', 'opacity-0');
+            setTimeout(() => { toast.classList.add('translate-y-20', 'opacity-0'); }, duration);
+        }
+
+    </script>
+</body>
+</html>
