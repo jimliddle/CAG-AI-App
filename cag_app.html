@@ -10,7 +10,6 @@
     
     <!-- PDF.js for PDF parsing -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
-    <script>pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';</script>
     
     <!-- Mammoth.js for .docx parsing -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js"></script>
@@ -23,6 +22,9 @@
 
     <!-- Tesseract.js for OCR -->
     <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+
+    <!-- html2pdf.js for PDF Export -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
 
     <!-- Icons -->
     <script src="https://unpkg.com/lucide@latest"></script>
@@ -165,7 +167,10 @@
             </div>
             
             <div class="flex items-center gap-2">
-                <button onclick="exportCurrentThread()" class="text-slate-500 hover:text-indigo-600 p-2 rounded-full hover:bg-slate-100" title="Export Thread">
+                <button onclick="exportCurrentThreadPDF()" class="text-slate-500 hover:text-indigo-600 p-2 rounded-full hover:bg-slate-100" title="Export PDF Audit">
+                    <i data-lucide="file-text" class="w-5 h-5"></i>
+                </button>
+                <button onclick="exportCurrentThreadTxt()" class="text-slate-500 hover:text-indigo-600 p-2 rounded-full hover:bg-slate-100" title="Export Text">
                     <i data-lucide="download" class="w-5 h-5"></i>
                 </button>
                 <button onclick="toggleContextPanel()" class="flex items-center gap-2 bg-slate-100 hover:bg-slate-200 text-slate-700 px-3 py-1.5 rounded-full text-sm font-medium transition-colors border border-slate-200">
@@ -243,7 +248,7 @@
                     </button>
                 </form>
                 <div class="text-center mt-2">
-                    <p class="text-xs text-slate-400">Pract.AI uses Gemini Flash API</p>
+                    <p class="text-xs text-slate-400">Pract.AI uses Gemini Flash.</p>
                 </div>
             </div>
         </div>
@@ -264,10 +269,15 @@
                 <div>
                     <label for="apiKeyInput" class="block text-sm font-medium text-slate-700 mb-1">Google Gemini API Key</label>
                     <p class="text-xs text-slate-500 mb-3">Your API key is stored locally in your browser (IndexedDB).</p>
-                    <div class="relative">
-                        <input type="password" id="apiKeyInput" class="w-full border border-slate-300 rounded-lg px-3 py-2.5 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition-all pr-10" placeholder="Enter AIza..." />
-                        <button onclick="toggleKeyVisibility()" class="absolute right-3 top-3 text-slate-400 hover:text-slate-600">
-                            <i data-lucide="eye" class="w-4 h-4" id="eyeIcon"></i>
+                    <div class="flex gap-2">
+                        <div class="relative flex-1">
+                            <input type="password" id="apiKeyInput" class="w-full border border-slate-300 rounded-lg px-3 py-2.5 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition-all pr-10" placeholder="Enter AIza..." />
+                            <button onclick="toggleKeyVisibility()" class="absolute right-3 top-3 text-slate-400 hover:text-slate-600">
+                                <i data-lucide="eye" class="w-4 h-4" id="eyeIcon"></i>
+                            </button>
+                        </div>
+                        <button onclick="removeApiKey()" class="bg-slate-100 hover:bg-red-50 text-slate-500 hover:text-red-500 border border-slate-200 px-3 rounded-lg transition-colors" title="Clear Key from Storage">
+                            <i data-lucide="trash" class="w-4 h-4"></i>
                         </button>
                     </div>
                     <div class="mt-2 text-right">
@@ -336,6 +346,30 @@
         </div>
     </div>
 
+    <!-- Hidden PDF Template -->
+    <div id="pdfTemplate" class="hidden">
+        <div style="font-family: 'Inter', sans-serif; color: #1e293b; padding: 40px; max-width: 800px; margin: 0 auto;">
+            <!-- Header -->
+            <div style="border-bottom: 2px solid #e2e8f0; padding-bottom: 20px; margin-bottom: 30px;">
+                <h1 style="font-size: 24px; font-weight: bold; color: #0f172a; margin: 0 0 10px 0;">Chat Thread for Audit</h1>
+                <div style="font-size: 14px; color: #64748b;">
+                    <div style="margin-bottom: 5px;"><strong>Thread Name:</strong> <span id="pdfThreadName">--</span></div>
+                    <div style="margin-bottom: 5px;"><strong>Date:</strong> <span id="pdfDate">--</span></div>
+                    <div style="margin-bottom: 5px;"><strong>Model Name & Version:</strong> <span id="pdfModel">gemini-2.5-flash-preview-09-2025</span></div>
+                    <div><strong>Files used for Context:</strong> <span id="pdfFiles">--</span></div>
+                </div>
+            </div>
+            <!-- Content -->
+            <div id="pdfContent" style="font-size: 14px; line-height: 1.6;">
+                <!-- Messages Injected Here -->
+            </div>
+            <!-- Footer -->
+            <div style="margin-top: 40px; padding-top: 20px; border-top: 1px solid #e2e8f0; font-size: 12px; color: #94a3b8; text-align: center;">
+                Generated by Pract.AI Context Chat
+            </div>
+        </div>
+    </div>
+
     <!-- Toast Notification -->
     <div id="toast" class="fixed bottom-4 right-4 bg-slate-800 text-white px-4 py-3 rounded-lg shadow-lg transform translate-y-20 opacity-0 transition-all duration-300 z-50 flex items-center gap-3">
         <i data-lucide="info" class="w-5 h-5 text-teal-400"></i>
@@ -360,15 +394,40 @@
         let maxTokensLimit = 200000;
         let customSystemInstruction = ""; 
         let isProcessing = false;
-        let renameTargetId = null; // Track which thread is being renamed
+        let renameTargetId = null;
+
+        // --- GLOBAL ERROR HANDLER ---
+        window.onerror = function(message, source, lineno, colno, error) {
+            console.error('Global Error:', error);
+            showToast(`Error: ${message}`, true, 5000);
+            return false;
+        };
+
+        // --- PDF WORKER SETUP (File:// Protocol Fix) ---
+        (function() {
+            const pdfWorkerUrl = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+            if (window.location.protocol === 'file:') {
+                // Fetch worker source and create blob URL to bypass cross-origin restrictions on file://
+                fetch(pdfWorkerUrl)
+                    .then(response => response.blob())
+                    .then(blob => {
+                        pdfjsLib.GlobalWorkerOptions.workerSrc = URL.createObjectURL(blob);
+                    })
+                    .catch(e => {
+                        console.warn("Failed to load PDF Worker via Blob (likely offline). Falling back to CDN.", e);
+                        pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
+                    });
+            } else {
+                pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
+            }
+        })();
 
         // --- INITIALIZATION ---
         document.addEventListener('DOMContentLoaded', async () => {
-            lucide.createIcons();
+            if (typeof lucide !== 'undefined') lucide.createIcons();
             try {
                 await initDB();
                 await loadSettings(); 
-                // Don't load global files here anymore, will load per chat
                 refreshSidebar();
                 setupEventListeners();
                 
@@ -380,7 +439,7 @@
                 }
             } catch (err) {
                 console.error("Initialization Error:", err);
-                showToast("Failed to initialize database", true);
+                showToast("App failed to initialize. See console for details.", true, 5000);
             }
         });
 
@@ -453,6 +512,7 @@
         // Settings
         const saveSetting = (id, value) => dbOp(STORE_SETTINGS, 'readwrite', store => store.put({ id, value }));
         const getSetting = (id) => dbOp(STORE_SETTINGS, 'readonly', store => store.get(id)).then(res => res ? res.value : null);
+        const deleteSetting = (id) => dbOp(STORE_SETTINGS, 'readwrite', store => store.delete(id));
 
         // Files (Persistent)
         const saveFileToDB = (fileObj) => dbOp(STORE_FILES, 'readwrite', store => store.put(fileObj));
@@ -562,6 +622,15 @@
             showToast("Settings saved");
             document.getElementById('settingsModal').classList.add('hidden');
         }
+
+        async function removeApiKey() {
+            if(confirm("Remove API Key from this browser? You will need to re-enter it to continue chatting.")) {
+                await deleteSetting('apiKey');
+                activeApiKey = null;
+                document.getElementById('apiKeyInput').value = '';
+                showToast("API Key removed");
+            }
+        }
         
         function toggleKeyVisibility() {
             const input = document.getElementById('apiKeyInput');
@@ -610,6 +679,7 @@
             const thread = await getThread(renameTargetId);
             if(thread) {
                 thread.title = newName;
+                thread.isManuallyNamed = true; // Set flag
                 await saveThread(thread);
                 
                 // Update UI if current
@@ -620,6 +690,312 @@
                 closeRenameModal();
                 showToast("Chat renamed");
             }
+        }
+
+        // --- FILE HANDLING & CONTEXT ---
+
+        function setupEventListeners() {
+            document.getElementById('chatForm').addEventListener('submit', handleSendMessage);
+            
+            const dropZone = document.getElementById('dropZone');
+            const fileInput = document.getElementById('fileInput');
+
+            dropZone.addEventListener('dragover', (e) => {
+                e.preventDefault();
+                if(!isProcessing) updateProcessingUI(true);
+            });
+
+            dropZone.addEventListener('dragleave', () => {
+                if(!isProcessing) updateProcessingUI(false);
+            });
+
+            dropZone.addEventListener('drop', (e) => {
+                e.preventDefault();
+                if(isProcessing) return;
+                updateProcessingUI(false);
+                handleFiles(e.dataTransfer.files);
+            });
+
+            dropZone.addEventListener('click', () => {
+                if(!isProcessing) fileInput.click();
+            });
+            fileInput.addEventListener('change', () => {
+                if(!isProcessing) handleFiles(fileInput.files);
+            });
+        }
+        
+        function updateProcessingUI(busy) {
+            const dropZone = document.getElementById('dropZone');
+            const idle = document.getElementById('dropZoneIdle');
+            const busyDiv = document.getElementById('dropZoneBusy');
+            
+            if(busy) {
+                dropZone.classList.add('bg-slate-100', 'cursor-wait');
+                dropZone.classList.remove('cursor-pointer', 'hover:bg-slate-50', 'bg-white');
+                idle.classList.add('hidden');
+                busyDiv.classList.remove('hidden');
+                busyDiv.classList.add('flex');
+            } else {
+                dropZone.classList.remove('bg-slate-100', 'cursor-wait');
+                dropZone.classList.add('cursor-pointer', 'hover:bg-slate-50', 'bg-white');
+                idle.classList.remove('hidden');
+                busyDiv.classList.add('hidden');
+                busyDiv.classList.remove('flex');
+            }
+        }
+
+        async function handleFiles(files) {
+            if (isProcessing) return;
+            isProcessing = true;
+            updateProcessingUI(true);
+            
+            const list = document.getElementById('fileList');
+            document.getElementById('emptyFilesMsg')?.remove();
+            
+            for (let file of files) {
+                // Check dupes
+                if (contextFiles.some(f => f.name === file.name)) {
+                    showToast(`"${file.name}" is already uploaded.`);
+                    continue;
+                }
+
+                // Check exhaustion before processing fully
+                if (totalTokens >= maxTokensLimit) {
+                    showToast("Context limit reached. Remove files to add more.", true, 4000);
+                    break;
+                }
+                
+                // SAFEGUARD: Large File Warning
+                if (file.size > 5 * 1024 * 1024) { // 5MB
+                     showToast(`Large file detected (${(file.size/1024/1024).toFixed(1)}MB). Browser may freeze briefly.`, false, 6000);
+                     // Allow UI to repaint
+                     await new Promise(r => setTimeout(r, 100));
+                } else {
+                    showToast(`Processing ${file.name}...`);
+                    // Allow UI to repaint
+                    await new Promise(r => setTimeout(r, 50));
+                }
+                
+                try {
+                    const content = await extractText(file);
+                    const tokens = estimateTokens(content);
+                    
+                    // Check if adding this file breaks limit
+                    if (totalTokens + tokens > maxTokensLimit) {
+                        showToast(`File "${file.name}" is too large for remaining context.`, true, 5000);
+                        continue;
+                    }
+
+                    const fileObj = {
+                        id: crypto.randomUUID(),
+                        threadId: currentThreadId,
+                        name: file.name,
+                        type: file.type,
+                        content: content,
+                        tokens: tokens,
+                        timestamp: Date.now()
+                    };
+
+                    contextFiles.push(fileObj);
+                    await saveFileToDB(fileObj);
+                    
+                    updateContextMeter();
+                    renderFileItem(fileObj);
+                    showToast(`Added ${file.name}`);
+
+                } catch (err) {
+                    console.error(err);
+                    showToast(`Error reading ${file.name}: ${err.message}`, true);
+                }
+            }
+            
+            isProcessing = false;
+            updateProcessingUI(false);
+        }
+
+        function extractText(file) {
+            return new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                
+                if (file.type === 'application/pdf') {
+                    reader.onload = async function() {
+                        const typedarray = new Uint8Array(this.result);
+                        try {
+                            const pdf = await pdfjsLib.getDocument(typedarray).promise;
+                            let text = '';
+                            for (let i = 1; i <= pdf.numPages; i++) {
+                                const page = await pdf.getPage(i);
+                                const content = await page.getTextContent();
+                                let pageText = content.items.map(item => item.str).join(' ');
+                                
+                                // OCR logic from previous turn
+                                if (pageText.trim().length < 20) {
+                                     showToast(`Page ${i}/${pdf.numPages} appears to be an image. Running OCR...`, false, 4000);
+                                     const viewport = page.getViewport({ scale: 2.0 });
+                                     const canvas = document.createElement('canvas');
+                                     canvas.width = viewport.width;
+                                     canvas.height = viewport.height;
+                                     const ctx = canvas.getContext('2d');
+                                     await page.render({ canvasContext: ctx, viewport: viewport }).promise;
+                                     
+                                     try {
+                                         // Check if Tesseract is defined (it should be via script tag)
+                                         if(typeof Tesseract !== 'undefined') {
+                                            const result = await Tesseract.recognize(canvas, 'eng');
+                                            pageText = result.data.text;
+                                         } else {
+                                            pageText = "[OCR Unavailable - Tesseract not loaded]";
+                                         }
+                                     } catch (ocrErr) {
+                                         console.warn("OCR Failed", ocrErr);
+                                         pageText = "[OCR Failed for Page " + i + "]";
+                                     }
+                                }
+
+                                text += pageText + '\n';
+                            }
+                            resolve(text);
+                        } catch (e) { reject(e); }
+                    };
+                    reader.readAsArrayBuffer(file);
+                } 
+                else if (file.type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') {
+                    reader.onload = function(e) {
+                        mammoth.extractRawText({ arrayBuffer: e.target.result })
+                            .then(result => resolve(result.value))
+                            .catch(reject);
+                    };
+                    reader.readAsArrayBuffer(file);
+                }
+                else {
+                    // Plain text fallback
+                    reader.onload = (e) => resolve(e.target.result);
+                    reader.readAsText(file);
+                }
+            });
+        }
+
+        function estimateTokens(text) {
+            return Math.ceil(text.length / 4);
+        }
+
+        function updateContextMeter() {
+            totalTokens = contextFiles.reduce((acc, f) => acc + f.tokens, 0);
+            const percentage = Math.min((totalTokens / maxTokensLimit) * 100, 100);
+            
+            const bar = document.getElementById('contextBar');
+            const txt = document.getElementById('tokenCountDisplay');
+            const status = document.getElementById('contextStatus');
+            const badge = document.getElementById('fileCountBadge');
+            const limitDisplay = document.getElementById('tokenLimitDisplay');
+
+            bar.style.width = `${percentage}%`;
+            txt.textContent = `${Math.round(percentage)}%`;
+            limitDisplay.textContent = `Limit: ${maxTokensLimit.toLocaleString()}`;
+            
+            // Color coding
+            if (percentage > 90) bar.className = "h-2.5 rounded-full transition-all duration-500 bg-red-500";
+            else if (percentage > 70) bar.className = "h-2.5 rounded-full transition-all duration-500 bg-yellow-500";
+            else bar.className = "h-2.5 rounded-full transition-all duration-500 bg-teal-500";
+
+            // Status text
+            if (percentage >= 100) status.textContent = "Context Full";
+            else status.textContent = `${contextFiles.length} files loaded`;
+
+            // Badge
+            badge.textContent = contextFiles.length;
+            badge.style.display = contextFiles.length > 0 ? 'inline-block' : 'none';
+        }
+
+        function renderFileItem(file) {
+            const list = document.getElementById('fileList');
+            const el = document.createElement('div');
+            el.className = "flex items-center justify-between bg-white border border-slate-200 p-3 rounded-lg shadow-sm";
+            el.innerHTML = `
+                <div class="flex items-center gap-3 overflow-hidden">
+                    <div class="bg-indigo-50 p-2 rounded text-indigo-600">
+                        <i data-lucide="${getFileIcon(file.name)}" class="w-4 h-4"></i>
+                    </div>
+                    <div class="min-w-0">
+                        <p class="text-sm font-medium text-slate-700 truncate">${escapeHtml(file.name)}</p>
+                        <p class="text-xs text-slate-400">~${file.tokens} tokens</p>
+                    </div>
+                </div>
+                <button onclick="removeFile('${file.id}', this)" class="text-slate-400 hover:text-red-500 p-1">
+                    <i data-lucide="trash-2" class="w-4 h-4"></i>
+                </button>
+            `;
+            list.appendChild(el);
+            lucide.createIcons();
+        }
+
+        async function removeFile(id, btnElement) {
+            contextFiles = contextFiles.filter(f => f.id !== id);
+            await removeFileFromDB(id);
+            btnElement.closest('div.flex').remove();
+            updateContextMeter();
+            if (contextFiles.length === 0) {
+                document.getElementById('fileList').innerHTML = `<div class="text-center text-slate-400 py-8 text-sm italic" id="emptyFilesMsg">No files uploaded yet.</div>`;
+            }
+        }
+
+        // --- UTILS ---
+
+        function toggleSidebar() {
+            const sidebar = document.getElementById('sidebar');
+            const overlay = document.getElementById('mobileOverlay');
+            if (sidebar.classList.contains('-translate-x-full')) {
+                sidebar.classList.remove('-translate-x-full');
+                overlay.classList.remove('hidden');
+            } else {
+                sidebar.classList.add('-translate-x-full');
+                overlay.classList.add('hidden');
+            }
+        }
+
+        function toggleContextPanel() {
+            const panel = document.getElementById('contextPanel');
+            if (panel.classList.contains('translate-x-full')) {
+                panel.classList.remove('translate-x-full');
+            } else {
+                panel.classList.add('translate-x-full');
+            }
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        function getFileIcon(filename) {
+            if (filename.endsWith('.pdf')) return 'file-text';
+            if (filename.endsWith('.docx') || filename.endsWith('.doc')) return 'file-type-2';
+            return 'file';
+        }
+
+        function scrollToBottom() {
+            const container = document.getElementById('chatContainer');
+            container.scrollTop = container.scrollHeight;
+        }
+
+        function copyText(btn) {
+            // Find the closest message content sibling
+            const contentDiv = btn.closest('.flex-col').querySelector('.markdown-body');
+            const text = contentDiv.innerText;
+            
+            // Fallback for iframe environments
+            const textArea = document.createElement("textarea");
+            textArea.value = text;
+            document.body.appendChild(textArea);
+            textArea.select();
+            document.execCommand('copy');
+            document.body.removeChild(textArea);
+
+            const originalHTML = btn.innerHTML;
+            btn.innerHTML = `<i data-lucide="check" class="w-3 h-3"></i> Copied`;
+            setTimeout(() => btn.innerHTML = originalHTML, 2000);
+            lucide.createIcons();
         }
 
         // --- CORE LOGIC: CHAT & CONTEXT ---
@@ -720,7 +1096,8 @@
                 await appendToThread(botMsg);
                 
                 const thread = await getThread(currentThreadId);
-                if (thread.messages.length <= 2) {
+                // Only auto-rename if not manually named
+                if (!thread.isManuallyNamed && thread.messages.length <= 2) {
                     thread.title = text.substring(0, 30) + (text.length > 30 ? '...' : '');
                     await saveThread(thread);
                     document.getElementById('currentChatTitle').textContent = thread.title;
@@ -761,7 +1138,6 @@
                     });
 
                     if (!response.ok) {
-                        // Attempt to extract the specific error message from Google
                         let errorDetails = `Status ${response.status}`;
                         try {
                             const errorBody = await response.json();
@@ -975,285 +1351,82 @@
             refreshSidebar();
         }
 
-        // --- FILE HANDLING & CONTEXT ---
-
-        function setupEventListeners() {
-            document.getElementById('chatForm').addEventListener('submit', handleSendMessage);
-            const dropZone = document.getElementById('dropZone');
-            const fileInput = document.getElementById('fileInput');
-
-            dropZone.addEventListener('dragover', (e) => {
-                e.preventDefault();
-                if(!isProcessing) dropZone.classList.add('border-indigo-500', 'bg-indigo-50');
-            });
-            dropZone.addEventListener('dragleave', () => {
-                if(!isProcessing) dropZone.classList.remove('border-indigo-500', 'bg-indigo-50');
-            });
-            dropZone.addEventListener('drop', (e) => {
-                e.preventDefault();
-                if(isProcessing) return;
-                dropZone.classList.remove('border-indigo-500', 'bg-indigo-50');
-                handleFiles(e.dataTransfer.files);
-            });
-            dropZone.addEventListener('click', () => { if(!isProcessing) fileInput.click(); });
-            fileInput.addEventListener('change', () => { if(!isProcessing) handleFiles(fileInput.files); });
-        }
+        // --- EXPORT PDF LOGIC ---
         
-        function updateProcessingUI(busy) {
-            const dropZone = document.getElementById('dropZone');
-            const idle = document.getElementById('dropZoneIdle');
-            const busyDiv = document.getElementById('dropZoneBusy');
-            if(busy) {
-                dropZone.classList.add('bg-slate-100', 'cursor-wait');
-                dropZone.classList.remove('cursor-pointer', 'hover:bg-slate-50', 'bg-white');
-                idle.classList.add('hidden');
-                busyDiv.classList.remove('hidden');
-                busyDiv.classList.add('flex');
-            } else {
-                dropZone.classList.remove('bg-slate-100', 'cursor-wait');
-                dropZone.classList.add('cursor-pointer', 'hover:bg-slate-50', 'bg-white');
-                idle.classList.remove('hidden');
-                busyDiv.classList.add('hidden');
-                busyDiv.classList.remove('flex');
-            }
-        }
-
-        async function handleFiles(files) {
-            if (isProcessing) return;
-            isProcessing = true;
-            updateProcessingUI(true);
-            const list = document.getElementById('fileList');
-            document.getElementById('emptyFilesMsg')?.remove();
-            
-            for (let file of files) {
-                if (contextFiles.some(f => f.name === file.name)) {
-                    showToast(`"${file.name}" is already uploaded.`);
-                    continue;
-                }
-                if (totalTokens >= maxTokensLimit) {
-                    showToast("Context limit reached.", true, 4000);
-                    break;
-                }
-                
-                showToast(`Processing ${file.name}...`);
-                await new Promise(r => setTimeout(r, 50));
-                
-                try {
-                    const content = await extractText(file);
-                    const tokens = estimateTokens(content);
-                    if (totalTokens + tokens > maxTokensLimit) {
-                        showToast(`File "${file.name}" is too large.`, true, 5000);
-                        continue;
-                    }
-
-                    const fileObj = {
-                        id: crypto.randomUUID(),
-                        threadId: currentThreadId, // SCOPE TO THREAD
-                        name: file.name,
-                        type: file.type,
-                        content: content,
-                        tokens: tokens,
-                        timestamp: Date.now()
-                    };
-
-                    contextFiles.push(fileObj);
-                    await saveFileToDB(fileObj); 
-                    
-                    updateContextMeter();
-                    renderFileItem(fileObj);
-                    showToast(`Added ${file.name}`);
-                } catch (err) {
-                    console.error(err);
-                    showToast(`Error reading ${file.name}: ${err.message}`, true);
-                }
-            }
-            isProcessing = false;
-            updateProcessingUI(false);
-        }
-
-        function extractText(file) {
-            return new Promise((resolve, reject) => {
-                const reader = new FileReader();
-                if (file.type === 'application/pdf') {
-                    reader.onload = async function() {
-                        const typedarray = new Uint8Array(this.result);
-                        try {
-                            const pdf = await pdfjsLib.getDocument(typedarray).promise;
-                            let text = '';
-                            
-                            // Iterate pages
-                            for (let i = 1; i <= pdf.numPages; i++) {
-                                const page = await pdf.getPage(i);
-                                const content = await page.getTextContent();
-                                let pageText = content.items.map(item => item.str).join(' ');
-                                
-                                // OCR Check: If page is mostly empty, treat as image
-                                if (pageText.trim().length < 20) {
-                                    showToast(`Page ${i}/${pdf.numPages} appears to be an image. Running OCR...`, false, 4000);
-                                    
-                                    // Render to Canvas
-                                    const viewport = page.getViewport({ scale: 2.0 });
-                                    const canvas = document.createElement('canvas');
-                                    canvas.width = viewport.width;
-                                    canvas.height = viewport.height;
-                                    const ctx = canvas.getContext('2d');
-                                    await page.render({ canvasContext: ctx, viewport: viewport }).promise;
-                                    
-                                    // Run Tesseract
-                                    try {
-                                        const result = await Tesseract.recognize(canvas, 'eng');
-                                        pageText = result.data.text;
-                                    } catch (ocrErr) {
-                                        console.warn("OCR Failed", ocrErr);
-                                        pageText = "[OCR Failed for Page " + i + "]";
-                                    }
-                                }
-                                
-                                text += pageText + '\n';
-                            }
-                            resolve(text);
-                        } catch (e) { reject(e); }
-                    };
-                    reader.readAsArrayBuffer(file);
-                } else if (file.type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') {
-                    reader.onload = function(e) {
-                        mammoth.extractRawText({ arrayBuffer: e.target.result })
-                            .then(result => resolve(result.value))
-                            .catch(reject);
-                    };
-                    reader.readAsArrayBuffer(file);
-                } else {
-                    reader.onload = (e) => resolve(e.target.result);
-                    reader.readAsText(file);
-                }
-            });
-        }
-
-        function estimateTokens(text) {
-            return Math.ceil(text.length / 4);
-        }
-
-        function updateContextMeter() {
-            totalTokens = contextFiles.reduce((acc, f) => acc + f.tokens, 0);
-            const percentage = Math.min((totalTokens / maxTokensLimit) * 100, 100);
-            
-            const bar = document.getElementById('contextBar');
-            const txt = document.getElementById('tokenCountDisplay');
-            const status = document.getElementById('contextStatus');
-            const badge = document.getElementById('fileCountBadge');
-            const limitDisplay = document.getElementById('tokenLimitDisplay');
-
-            bar.style.width = `${percentage}%`;
-            txt.textContent = `${Math.round(percentage)}%`;
-            limitDisplay.textContent = `Limit: ${maxTokensLimit.toLocaleString()}`;
-            
-            if (percentage > 90) bar.className = "h-2.5 rounded-full transition-all duration-500 bg-red-500";
-            else if (percentage > 70) bar.className = "h-2.5 rounded-full transition-all duration-500 bg-yellow-500";
-            else bar.className = "h-2.5 rounded-full transition-all duration-500 bg-teal-500";
-
-            if (percentage >= 100) status.textContent = "Context Full";
-            else status.textContent = `${contextFiles.length} files loaded`;
-
-            badge.textContent = contextFiles.length;
-            badge.style.display = contextFiles.length > 0 ? 'inline-block' : 'none';
-        }
-
-        function renderFileItem(file) {
-            const list = document.getElementById('fileList');
-            const el = document.createElement('div');
-            el.className = "flex items-center justify-between bg-white border border-slate-200 p-3 rounded-lg shadow-sm";
-            el.innerHTML = `
-                <div class="flex items-center gap-3 overflow-hidden">
-                    <div class="bg-indigo-50 p-2 rounded text-indigo-600">
-                        <i data-lucide="${getFileIcon(file.name)}" class="w-4 h-4"></i>
-                    </div>
-                    <div class="min-w-0">
-                        <p class="text-sm font-medium text-slate-700 truncate">${escapeHtml(file.name)}</p>
-                        <p class="text-xs text-slate-400">~${file.tokens} tokens</p>
-                    </div>
-                </div>
-                <button onclick="removeFile('${file.id}', this)" class="text-slate-400 hover:text-red-500 p-1">
-                    <i data-lucide="trash-2" class="w-4 h-4"></i>
-                </button>
-            `;
-            list.appendChild(el);
-            lucide.createIcons();
-        }
-
-        async function removeFile(id, btnElement) {
-            contextFiles = contextFiles.filter(f => f.id !== id);
-            await removeFileFromDB(id); 
-            
-            btnElement.closest('div.flex').remove();
-            updateContextMeter();
-            if (contextFiles.length === 0) {
-                document.getElementById('fileList').innerHTML = `<div class="text-center text-slate-400 py-8 text-sm italic" id="emptyFilesMsg">No files uploaded yet.</div>`;
-            }
-        }
-
-        // --- UTILS ---
-
-        function toggleSidebar() {
-            const sidebar = document.getElementById('sidebar');
-            const overlay = document.getElementById('mobileOverlay');
-            if (sidebar.classList.contains('-translate-x-full')) {
-                sidebar.classList.remove('-translate-x-full');
-                overlay.classList.remove('hidden');
-            } else {
-                sidebar.classList.add('-translate-x-full');
-                overlay.classList.add('hidden');
-            }
-        }
-
-        function toggleContextPanel() {
-            const panel = document.getElementById('contextPanel');
-            if (panel.classList.contains('translate-x-full')) {
-                panel.classList.remove('translate-x-full');
-            } else {
-                panel.classList.add('translate-x-full');
-            }
-        }
-
-        function escapeHtml(text) {
-            const div = document.createElement('div');
-            div.textContent = text;
-            return div.innerHTML;
-        }
-
-        function getFileIcon(filename) {
-            if (filename.endsWith('.pdf')) return 'file-text';
-            if (filename.endsWith('.docx') || filename.endsWith('.doc')) return 'file-type-2';
-            return 'file';
-        }
-
-        function scrollToBottom() {
-            const container = document.getElementById('chatContainer');
-            container.scrollTop = container.scrollHeight;
-        }
-
-        function copyText(btn) {
-            const contentDiv = btn.closest('.flex-col').querySelector('.markdown-body');
-            const text = contentDiv.innerText;
-            const textArea = document.createElement("textarea");
-            textArea.value = text;
-            document.body.appendChild(textArea);
-            textArea.select();
-            document.execCommand('copy');
-            document.body.removeChild(textArea);
-            const originalHTML = btn.innerHTML;
-            btn.innerHTML = `<i data-lucide="check" class="w-3 h-3"></i> Copied`;
-            setTimeout(() => btn.innerHTML = originalHTML, 2000);
-            lucide.createIcons();
-        }
-
-        async function exportCurrentThread() {
+        async function exportCurrentThreadPDF() {
             const thread = await getThread(currentThreadId);
             if (!thread || thread.messages.length === 0) {
                 showToast("No messages to export", true);
                 return;
             }
-            let text = `Pract.AI Thread: ${thread.title}\nDate: ${new Date(thread.updatedAt).toLocaleString()}\n\n`;
+
+            // Fill hidden template
+            document.getElementById('pdfThreadName').textContent = thread.title;
+            document.getElementById('pdfDate').textContent = new Date(thread.updatedAt).toLocaleDateString() + ' ' + new Date(thread.updatedAt).toLocaleTimeString();
+            // Model is hardcoded for now, or could come from message metadata if we saved it
+            document.getElementById('pdfModel').textContent = 'gemini-2.5-flash-preview-09-2025';
+            
+            // Add Context Files
+            const fileNames = contextFiles.length > 0 ? contextFiles.map(f => f.name).join(', ') : 'None';
+            document.getElementById('pdfFiles').textContent = fileNames;
+
+            const contentDiv = document.getElementById('pdfContent');
+            contentDiv.innerHTML = '';
+
+            thread.messages.forEach(msg => {
+                const wrapper = document.createElement('div');
+                wrapper.style.marginBottom = '20px';
+                
+                const roleHeader = document.createElement('div');
+                roleHeader.style.fontWeight = 'bold';
+                roleHeader.style.fontSize = '12px';
+                roleHeader.style.color = msg.role === 'user' ? '#4338ca' : '#0f766e';
+                roleHeader.style.marginBottom = '4px';
+                roleHeader.textContent = msg.role === 'user' ? 'USER' : 'PRACT.AI MODEL';
+                
+                const body = document.createElement('div');
+                // Use Marked to render HTML, but strip some heavy styles if needed
+                body.innerHTML = marked.parse(msg.content);
+                
+                wrapper.appendChild(roleHeader);
+                wrapper.appendChild(body);
+                contentDiv.appendChild(wrapper);
+            });
+
+            // Config for html2pdf
+            const element = document.getElementById('pdfTemplate');
+            element.classList.remove('hidden'); // momentarily show to render
+            
+            const opt = {
+                margin:       10,
+                filename:     `PractAI-Audit-${new Date().toISOString().slice(0,10)}.pdf`,
+                image:        { type: 'jpeg', quality: 0.98 },
+                html2canvas:  { scale: 2 },
+                jsPDF:        { unit: 'mm', format: 'a4', orientation: 'portrait' }
+            };
+
+            // Generate
+            html2pdf().set(opt).from(element).save().then(() => {
+                element.classList.add('hidden'); // hide again
+                showToast("PDF Audit Exported");
+            });
+        }
+        
+        async function exportCurrentThreadTxt() {
+            const thread = await getThread(currentThreadId);
+            if (!thread || thread.messages.length === 0) {
+                showToast("No messages to export", true);
+                return;
+            }
+            
+            const fileNames = contextFiles.length > 0 ? contextFiles.map(f => f.name).join(', ') : 'None';
+            
+            let text = `Pract.AI Thread: ${thread.title}\n`;
+            text += `Date: ${new Date(thread.updatedAt).toLocaleString()}\n`;
+            text += `Model: gemini-2.5-flash-preview-09-2025\n`;
+            text += `Files used for Context: ${fileNames}\n\n`;
             text += `------------------------------------------------\n\n`;
+            
             thread.messages.forEach(m => {
                 text += `[${m.role.toUpperCase()}] - ${new Date(m.timestamp).toLocaleTimeString()}\n`;
                 text += `${m.content}\n\n`;
@@ -1265,7 +1438,7 @@
             a.download = `pract-ai-chat-${new Date().toISOString().slice(0,10)}.txt`;
             a.click();
             URL.revokeObjectURL(url);
-            showToast("Thread exported");
+            showToast("Text exported");
         }
 
         function showToast(msg, isError = false, duration = 3000) {
