@@ -65,4 +65,4 @@ Also, each chat thread can be exported and retained for Audit purposes:
 
 <img width="666" height="574" alt="LLM Audit Report" src="https://github.com/user-attachments/assets/214c8c73-388a-4063-866c-8f8253d7dc26" />
 
-As you can see in this app, we didn't need a Vector Database, an Embedding Model, or complex chunking logic. We just dumped the text in, and Gemini handled the rest so its a much simpler architecture but also has the advantage of being able to work with the full context of the documents.
+As you can see in this app, we didn't need a Vector Database, an Embedding Model, or complex chunking logic. We just dumped the text in, and Gemini handled the rest so its a much simpler architecture but also has the advantage of being able to work with the full context of the documents, which is important in many use cases.
