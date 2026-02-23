@@ -1,4 +1,4 @@
-This is a Cache Augmented Retrieval AI Application (CAG)
+This is a Cache Augmented Retrieval AI Application (CAG). You can launch it at: https://jimliddle.github.io/CAG-AI-App/ (all state is client side in the browser)
 
 Unlike RAG, CAG instead preloads a curated knowledge corpus into the model’s extended context, eliminating per‑query retrieval to achieve lower latency, simpler architecture, and more consistent accurate reasoning for stable or bounded datasets. This is at the cost of context-size limits, upfront compute to build and refresh caches, and potential staleness when data changes rapidly.
 
