@@ -248,7 +248,7 @@
                     </button>
                 </form>
                 <div class="text-center mt-2">
-                    <p class="text-xs text-slate-400">Pract.AI uses Gemini Flash.</p>
+                    <p class="text-xs text-slate-400">Pract.AI uses Gemini 2.5 Flash with CAG.</p>
                 </div>
             </div>
         </div>
@@ -395,6 +395,7 @@
         let customSystemInstruction = ""; 
         let isProcessing = false;
         let renameTargetId = null;
+        let activeCacheName = null; // --- CAG MODIFICATION --- Tracks the Gemini Cache ID
 
         // --- GLOBAL ERROR HANDLER ---
         window.onerror = function(message, source, lineno, colno, error) {
@@ -616,6 +617,11 @@
             
             activeApiKey = key;
             maxTokensLimit = newLimit;
+            
+            // --- CAG MODIFICATION --- Invalidate cache if system instruction changed
+            if (customSystemInstruction !== instruction) {
+                activeCacheName = null;
+            }
             customSystemInstruction = instruction;
             
             updateContextMeter();
@@ -627,6 +633,7 @@
             if(confirm("Remove API Key from this browser? You will need to re-enter it to continue chatting.")) {
                 await deleteSetting('apiKey');
                 activeApiKey = null;
+                activeCacheName = null; // --- CAG MODIFICATION --- Invalidate cache
                 document.getElementById('apiKeyInput').value = '';
                 showToast("API Key removed");
             }
@@ -749,6 +756,9 @@
             isProcessing = true;
             updateProcessingUI(true);
             
+            // --- CAG MODIFICATION --- Invalidate cache on new file upload
+            activeCacheName = null; 
+
             const list = document.getElementById('fileList');
             document.getElementById('emptyFilesMsg')?.remove();
             
@@ -934,6 +944,10 @@
             await removeFileFromDB(id);
             btnElement.closest('div.flex').remove();
             updateContextMeter();
+
+            // --- CAG MODIFICATION --- Invalidate cache on file deletion
+            activeCacheName = null; 
+
             if (contextFiles.length === 0) {
                 document.getElementById('fileList').innerHTML = `<div class="text-center text-slate-400 py-8 text-sm italic" id="emptyFilesMsg">No files uploaded yet.</div>`;
             }
@@ -981,7 +995,8 @@
 
         function copyText(btn) {
             // Find the closest message content sibling
-            const contentDiv = btn.closest('.flex-col').querySelector('.markdown-body');
+            const container = btn.closest('.flex-col');
+            const contentDiv = container.querySelector('.markdown-body') || container.querySelector('div[id^="msg-content-"]');
             const text = contentDiv.innerText;
             
             // Fallback for iframe environments
@@ -1029,6 +1044,9 @@
 
             // Update Context for this specific thread
             await loadFilesFromDB(id);
+            
+            // --- CAG MODIFICATION --- Invalidate cache when switching chats
+            activeCacheName = null; 
 
             if (thread.messages.length === 0) {
                 renderWelcomeScreen();
@@ -1041,6 +1059,33 @@
                 el.classList.remove('bg-slate-800', 'border-l-4', 'border-indigo-500');
                 if (el.dataset.id === id) el.classList.add('bg-slate-800', 'border-l-4', 'border-indigo-500');
             });
+        }
+
+        // --- CAG MODIFICATION --- New Cache Creation API Call
+        async function createGeminiCache(contextString, systemInstruction) {
+            const url = `https://generativelanguage.googleapis.com/v1beta/cachedContents?key=${activeApiKey}`;
+            
+            const payload = {
+                model: "models/gemini-2.5-flash", 
+                systemInstruction: { parts: [{ text: systemInstruction }] },
+                contents: [{ role: "user", parts: [{ text: contextString }] }],
+                ttl: "3600s" // Cache lives for 1 hour
+            };
+
+            const response = await fetch(url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+
+            if (!response.ok) {
+                const err = await response.json();
+                throw new Error(err.error?.message || "Failed to create cache");
+            }
+            
+            const data = await response.json();
+            console.log("Cache created successfully:", data.name);
+            return data.name; // Returns the cache string reference
         }
 
         async function handleSendMessage(e) {
@@ -1075,24 +1120,67 @@
 
             // 3. Construct Prompt
             const contextString = contextFiles.map(f => `--- FILE: ${f.name} ---\n${f.content}\n--- END FILE ---`).join('\n\n');
-            
             const baseInstruction = customSystemInstruction || "You are a helpful AI assistant for Pract.AI. Answer the user's questions based primarily on these documents. If the answer is not in the documents, rely on your general knowledge but mention that it wasn't in the files.";
-            
-            const systemPrompt = `${baseInstruction}
-            
-            CONTEXT DOCUMENTS:
-            ${contextString ? contextString : "No documents uploaded yet."}`;
 
             try {
-                const responseText = await callGeminiAPI(text, systemPrompt);
+                // Remove spinner early to prepare for stream
                 document.getElementById(loadingId).remove();
                 
-                const msgId = 'msg-' + Date.now();
-                const botMsgContainer = createMessageContainer(msgId, 'model'); 
+                const botTimestamp = Date.now();
+                const botMsgContainer = createMessageContainer(botTimestamp, 'model'); 
+                botMsgContainer.classList.add('typing-cursor'); // Add cursor during stream
                 
-                await typeWriterEffect(botMsgContainer, responseText);
+                let fullResponseText = "";
+                let finalUsageStats = null;
 
-                const botMsg = { role: 'model', content: responseText, timestamp: Date.now() };
+                // Callback for each streamed chunk of text
+                const handleChunk = (textChunk) => {
+                    fullResponseText += textChunk;
+                    // Render raw text on the fly (prevents broken markdown during stream)
+                    botMsgContainer.innerText = fullResponseText;
+                    scrollToBottom();
+                };
+
+                // Callback to grab the cache hit data when stream finishes
+                const handleUsage = (usage) => {
+                    finalUsageStats = usage;
+                };
+
+                // --- CAG MODIFICATION --- Routing Logic: Cache vs Standard Stuffing
+                if (totalTokens >= 32768) {
+                    if (!activeCacheName) {
+                        botMsgContainer.innerText = "Building cache (this only happens once)...";
+                        activeCacheName = await createGeminiCache(contextString, baseInstruction);
+                        botMsgContainer.innerText = ""; // Clear status
+                    }
+                    // Call API using the fast/cheap cache
+                    await streamGeminiAPI(text, baseInstruction, contextString, activeCacheName, handleChunk, handleUsage);
+                } else {
+                    // Context too small to cache, use standard stuffing
+                    await streamGeminiAPI(text, baseInstruction, contextString, null, handleChunk, handleUsage);
+                }
+
+                // Stream finished: Render final markdown formatting and remove cursor
+                botMsgContainer.classList.remove('typing-cursor');
+                botMsgContainer.innerHTML = DOMPurify.sanitize(marked.parse(fullResponseText));
+                scrollToBottom();
+
+                // --- CAG MODIFICATION --- Attach visual Cache Hit badge
+                if (finalUsageStats && finalUsageStats.cachedContentTokenCount > 0) {
+                     const statsDiv = document.createElement('div');
+                     statsDiv.title = "These tokens were served directly from memory, avoiding re-processing delays and saving API costs.";
+                     statsDiv.className = "mt-2 flex items-center gap-1.5 text-[11px] font-medium text-emerald-700 bg-emerald-50 px-2.5 py-1.5 rounded-md w-fit border border-emerald-200/60 shadow-sm cursor-help";
+                     statsDiv.innerHTML = `<i data-lucide="zap" class="w-3.5 h-3.5 fill-emerald-500 text-emerald-500"></i> Cache Hit: ${finalUsageStats.cachedContentTokenCount.toLocaleString()} tokens bypassed!`;
+                     botMsgContainer.parentElement.insertBefore(statsDiv, botMsgContainer.nextSibling);
+                     lucide.createIcons();
+                }
+
+                const botMsg = { 
+                    role: 'model', 
+                    content: fullResponseText, 
+                    timestamp: botTimestamp,
+                    usage: finalUsageStats 
+                };
                 await appendToThread(botMsg);
                 
                 const thread = await getThread(currentThreadId);
@@ -1118,13 +1206,25 @@
             refreshSidebar();
         }
 
-        async function callGeminiAPI(userQuery, systemInstruction) {
-            const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${activeApiKey}`;
+        // --- CAG STREAMING LOGIC --- Replacing standard callGeminiAPI
+        async function streamGeminiAPI(userQuery, systemInstruction, contextString, cacheName, onChunk, onUsage) {
+            // Using streamGenerateContent with alt=sse for Server-Sent Events
+            const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:streamGenerateContent?alt=sse&key=${activeApiKey}`;
             
-            const payload = {
-                contents: [{ parts: [{ text: userQuery }] }],
-                systemInstruction: { parts: [{ text: systemInstruction }] }
-            };
+            let payload = {};
+
+            if (cacheName) {
+                payload = {
+                    cachedContent: cacheName,
+                    contents: [{ parts: [{ text: userQuery }] }]
+                };
+            } else {
+                const systemPrompt = `${systemInstruction}\n\nCONTEXT DOCUMENTS:\n${contextString ? contextString : "No documents uploaded yet."}`;
+                payload = {
+                    contents: [{ parts: [{ text: userQuery }] }],
+                    systemInstruction: { parts: [{ text: systemPrompt }] }
+                };
+            }
 
             let retryCount = 0;
             const maxRetries = 3;
@@ -1145,38 +1245,62 @@
                                 errorDetails = errorBody.error.message;
                             }
                         } catch (parseErr) {
-                            // If JSON parsing fails, use status text
                             errorDetails = response.statusText || errorDetails;
                         }
                         throw new Error(`API Error: ${errorDetails}`);
                     }
                     
-                    const data = await response.json();
-                    return data.candidates?.[0]?.content?.parts?.[0]?.text || "I couldn't generate a response.";
+                    // Setup reader for streaming chunks
+                    const reader = response.body.getReader();
+                    const decoder = new TextDecoder("utf-8");
+                    let buffer = "";
+
+                    while (true) {
+                        const { done, value } = await reader.read();
+                        if (done) break;
+                        
+                        buffer += decoder.decode(value, { stream: true });
+                        const lines = buffer.split("\n");
+                        buffer = lines.pop(); // Keep incomplete lines in the buffer
+
+                        for (const line of lines) {
+                            if (line.startsWith("data: ")) {
+                                const dataStr = line.slice(6);
+                                if (dataStr.trim() === "[DONE]") continue;
+                                
+                                try {
+                                    const data = JSON.parse(dataStr);
+                                    // Extract text chunk
+                                    if (data.candidates?.[0]?.content?.parts?.[0]?.text) {
+                                        onChunk(data.candidates[0].content.parts[0].text);
+                                    }
+                                    // Extract usage metadata (usually sent in the final chunks)
+                                    if (data.usageMetadata) {
+                                        onUsage(data.usageMetadata);
+                                    }
+                                } catch (e) {
+                                    console.warn("Stream parse error", e);
+                                }
+                            }
+                        }
+                    }
+                    return; // Success, exit retry loop
                 } catch (e) {
                     console.error("Gemini API Attempt Failed:", e);
-                    
-                    // Do not retry for Client Errors (400-499) as they won't resolve with retries
-                    // e.g. 400 Bad Request, 429 Quota Exceeded, 413 Payload Too Large
                     const isClientError = e.message.includes('400') || e.message.includes('429') || e.message.includes('413') || e.message.includes('INVALID_ARGUMENT');
-                    
-                    if (isClientError || retryCount >= maxRetries) {
-                        throw e;
-                    }
-                    
+                    if (isClientError || retryCount >= maxRetries) throw e;
                     retryCount++;
                     await new Promise(r => setTimeout(r, 1000 * Math.pow(2, retryCount)));
                 }
             }
         }
 
-        // --- TYPEWRITER EFFECT ---
-        
-        function createMessageContainer(id, role) {
+        function createMessageContainer(timestamp, role) {
             const container = document.getElementById('chatContainer');
             const div = document.createElement('div');
             const isUser = role === 'user';
             
+            div.id = `msg-container-${timestamp}`;
             div.className = `flex w-full mb-6 ${isUser ? 'justify-end' : 'justify-start'}`;
             
             div.innerHTML = `
@@ -1184,12 +1308,18 @@
                     <div class="w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 ${isUser ? 'bg-indigo-600 text-white' : 'bg-teal-600 text-white'}">
                         ${isUser ? '<i data-lucide="user" class="w-5 h-5"></i>' : '<i data-lucide="bot" class="w-5 h-5"></i>'}
                     </div>
-                    <div class="flex flex-col gap-1 ${isUser ? 'items-end' : 'items-start'} min-w-0">
-                        <div id="${id}-content" class="px-5 py-3.5 rounded-2xl shadow-sm text-sm leading-relaxed overflow-hidden ${isUser ? 'bg-indigo-600 text-white rounded-tr-none' : 'bg-white border border-slate-200 text-slate-700 markdown-body rounded-tl-none typing-cursor'}">
+                    <div class="flex flex-col gap-1 ${isUser ? 'items-end' : 'items-start'} min-w-0 w-full">
+                        <div id="msg-content-${timestamp}" class="px-5 py-3.5 rounded-2xl shadow-sm text-sm leading-relaxed overflow-hidden w-full ${isUser ? 'bg-indigo-600 text-white rounded-tr-none' : 'bg-white border border-slate-200 text-slate-700 markdown-body rounded-tl-none typing-cursor'}">
                         </div>
-                        <div class="flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                        <div class="flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity mt-1">
                              <button onclick="copyText(this)" class="text-xs text-slate-400 hover:text-indigo-600 flex items-center gap-1">
                                 <i data-lucide="copy" class="w-3 h-3"></i> Copy
+                            </button>
+                            <button onclick="editMessage(${timestamp}, ${isUser})" class="text-xs text-slate-400 hover:text-indigo-600 flex items-center gap-1">
+                                <i data-lucide="pencil" class="w-3 h-3"></i> Edit
+                            </button>
+                            <button onclick="deleteMessage(${timestamp})" class="text-xs text-slate-400 hover:text-red-500 flex items-center gap-1">
+                                <i data-lucide="trash-2" class="w-3 h-3"></i> Delete
                             </button>
                         </div>
                     </div>
@@ -1201,23 +1331,74 @@
             
             container.appendChild(div);
             lucide.createIcons();
-            return document.getElementById(`${id}-content`);
+            return document.getElementById(`msg-content-${timestamp}`);
         }
 
-        async function typeWriterEffect(element, text) {
-            const words = text.split(/(\s+)/); 
+        // --- MESSAGE EDITING & DELETING ---
+        
+        async function editMessage(timestamp, isUser) {
+            const thread = await getThread(currentThreadId);
+            const msg = thread.messages.find(m => m.timestamp === timestamp);
+            if (!msg) return;
+
+            const contentDiv = document.getElementById(`msg-content-${timestamp}`);
             
-            for (let i = 0; i < words.length; i++) {
-                element.innerText += words[i];
-                scrollToBottom();
-                const delay = words[i].length > 1 ? 15 : 5; 
-                await new Promise(r => setTimeout(r, delay));
+            contentDiv.innerHTML = `
+                <textarea id="edit-textarea-${timestamp}" class="w-full border border-slate-300 rounded-lg p-3 text-sm text-slate-800 min-h-[120px] outline-none focus:ring-2 focus:ring-indigo-500 custom-scroll ${isUser ? 'bg-white' : 'bg-slate-50'}"></textarea>
+                <div class="flex justify-end gap-2 mt-3">
+                    <button onclick="cancelEdit()" class="text-xs px-3 py-1.5 rounded-md bg-slate-200 hover:bg-slate-300 text-slate-700 font-medium transition-colors">Cancel</button>
+                    <button onclick="saveEdit(${timestamp})" class="text-xs px-3 py-1.5 rounded-md bg-indigo-600 hover:bg-indigo-700 text-white font-medium transition-colors shadow-sm">Save</button>
+                </div>
+            `;
+            
+            document.getElementById(`edit-textarea-${timestamp}`).value = msg.content;
+            
+            contentDiv.classList.remove('markdown-body');
+            if(isUser) {
+                contentDiv.classList.remove('bg-indigo-600', 'text-white');
+                contentDiv.classList.add('bg-white', 'text-slate-800', 'border', 'border-slate-200');
+            }
+        }
+
+        async function cancelEdit() {
+            loadChat(currentThreadId);
+        }
+
+        async function saveEdit(timestamp) {
+            const textarea = document.getElementById(`edit-textarea-${timestamp}`);
+            if(!textarea) return;
+            
+            const newContent = textarea.value.trim();
+            if(!newContent) {
+                showToast("Message cannot be empty", true);
+                return;
             }
             
-            element.classList.remove('typing-cursor');
-            element.innerHTML = marked.parse(text);
-            element.innerHTML = DOMPurify.sanitize(element.innerHTML);
-            scrollToBottom();
+            const thread = await getThread(currentThreadId);
+            const msgIndex = thread.messages.findIndex(m => m.timestamp === timestamp);
+            
+            if (msgIndex !== -1) {
+                thread.messages[msgIndex].content = newContent;
+                await saveThread(thread);
+                loadChat(currentThreadId);
+                showToast("Message updated");
+            }
+        }
+
+        async function deleteMessage(timestamp) {
+            if (!confirm("Delete this message?")) return;
+            
+            const thread = await getThread(currentThreadId);
+            if (!thread) return;
+            
+            thread.messages = thread.messages.filter(m => m.timestamp !== timestamp);
+            await saveThread(thread);
+            
+            const el = document.getElementById(`msg-container-${timestamp}`);
+            if (el) el.remove();
+            
+            if (thread.messages.length === 0) renderWelcomeScreen();
+            showToast("Message deleted");
         }
 
         // --- UI RENDERERS ---
@@ -1227,6 +1408,15 @@
             const div = document.createElement('div');
             div.id = 'welcomeScreen';
             div.className = 'flex flex-col items-center justify-center h-full text-center space-y-4 opacity-70';
+            
+            let btnHtml = '';
+            if (!activeApiKey) {
+                btnHtml = `
+                <button onclick="openSettings()" class="mt-4 px-4 py-2 bg-white border border-slate-300 rounded-lg text-sm text-slate-600 hover:bg-slate-50 transition-colors shadow-sm">
+                    Configure API Key
+                </button>`;
+            }
+
             div.innerHTML = `
                 <div class="w-16 h-16 bg-indigo-100 rounded-2xl flex items-center justify-center text-indigo-600 mb-2">
                     <i data-lucide="bot" class="w-8 h-8"></i>
@@ -1236,9 +1426,7 @@
                     Upload documents to the context panel and ask questions. 
                     Your chats and files are saved automatically to your browser.
                 </p>
-                <button onclick="openSettings()" class="mt-4 px-4 py-2 bg-white border border-slate-300 rounded-lg text-sm text-slate-600 hover:bg-slate-50 transition-colors shadow-sm">
-                    Configure API Key
-                </button>
+                ${btnHtml}
             `;
             container.appendChild(div);
             lucide.createIcons();
@@ -1250,6 +1438,7 @@
             const isUser = msg.role === 'user';
             const isSystem = msg.role === 'system';
             
+            div.id = `msg-container-${msg.timestamp}`;
             div.className = `flex w-full mb-6 ${isUser ? 'justify-end' : 'justify-start'}`;
             
             if (isSystem) {
@@ -1262,18 +1451,35 @@
                 const contentHtml = isUser ? `<p>${escapeHtml(msg.content)}</p>` : marked.parse(msg.content);
                 const sanitizedHtml = isUser ? contentHtml : DOMPurify.sanitize(contentHtml);
 
+                // --- CAG MODIFICATION --- Render previously saved cache hit badges
+                let badgeHtml = '';
+                if (msg.usage && msg.usage.cachedContentTokenCount > 0) {
+                    badgeHtml = `
+                    <div title="These tokens were served directly from memory, avoiding re-processing delays and saving API costs." class="mt-2 flex items-center gap-1.5 text-[11px] font-medium text-emerald-700 bg-emerald-50 px-2.5 py-1.5 rounded-md w-fit border border-emerald-200/60 shadow-sm cursor-help">
+                        <i data-lucide="zap" class="w-3.5 h-3.5 fill-emerald-500 text-emerald-500"></i> 
+                        Cache Hit: ${msg.usage.cachedContentTokenCount.toLocaleString()} tokens bypassed!
+                    </div>`;
+                }
+
                 div.innerHTML = `
                     <div class="flex max-w-[85%] md:max-w-[75%] gap-3 ${isUser ? 'flex-row-reverse' : 'flex-row'}">
                         <div class="w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 ${isUser ? 'bg-indigo-600 text-white' : 'bg-teal-600 text-white'}">
                             ${isUser ? '<i data-lucide="user" class="w-5 h-5"></i>' : '<i data-lucide="bot" class="w-5 h-5"></i>'}
                         </div>
-                        <div class="flex flex-col gap-1 ${isUser ? 'items-end' : 'items-start'} min-w-0">
-                            <div class="px-5 py-3.5 rounded-2xl shadow-sm text-sm leading-relaxed overflow-hidden ${isUser ? 'bg-indigo-600 text-white rounded-tr-none' : 'bg-white border border-slate-200 text-slate-700 markdown-body rounded-tl-none'}">
+                        <div class="flex flex-col gap-1 ${isUser ? 'items-end' : 'items-start'} min-w-0 w-full">
+                            <div id="msg-content-${msg.timestamp}" class="px-5 py-3.5 rounded-2xl shadow-sm text-sm leading-relaxed overflow-hidden w-full ${isUser ? 'bg-indigo-600 text-white rounded-tr-none' : 'bg-white border border-slate-200 text-slate-700 markdown-body rounded-tl-none'}">
                                 ${sanitizedHtml}
                             </div>
-                            <div class="flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                            ${badgeHtml}
+                            <div class="flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity mt-1">
                                 <button onclick="copyText(this)" class="text-xs text-slate-400 hover:text-indigo-600 flex items-center gap-1">
                                     <i data-lucide="copy" class="w-3 h-3"></i> Copy
+                                </button>
+                                <button onclick="editMessage(${msg.timestamp}, ${isUser})" class="text-xs text-slate-400 hover:text-indigo-600 flex items-center gap-1">
+                                    <i data-lucide="pencil" class="w-3 h-3"></i> Edit
+                                </button>
+                                <button onclick="deleteMessage(${msg.timestamp})" class="text-xs text-slate-400 hover:text-red-500 flex items-center gap-1">
+                                    <i data-lucide="trash-2" class="w-3 h-3"></i> Delete
                                 </button>
                             </div>
                         </div>
@@ -1363,7 +1569,6 @@
             // Fill hidden template
             document.getElementById('pdfThreadName').textContent = thread.title;
             document.getElementById('pdfDate').textContent = new Date(thread.updatedAt).toLocaleDateString() + ' ' + new Date(thread.updatedAt).toLocaleTimeString();
-            // Model is hardcoded for now, or could come from message metadata if we saved it
             document.getElementById('pdfModel').textContent = 'gemini-2.5-flash-preview-09-2025';
             
             // Add Context Files
@@ -1429,7 +1634,12 @@
             
             thread.messages.forEach(m => {
                 text += `[${m.role.toUpperCase()}] - ${new Date(m.timestamp).toLocaleTimeString()}\n`;
-                text += `${m.content}\n\n`;
+                text += `${m.content}\n`;
+                // Add usage tracking to text export if it exists
+                if (m.usage && m.usage.cachedContentTokenCount) {
+                     text += `[Cache Hit: ${m.usage.cachedContentTokenCount} tokens saved]\n`;
+                }
+                text += `\n`;
             });
             const blob = new Blob([text], { type: 'text/plain' });
             const url = URL.createObjectURL(blob);
@@ -1453,4 +1663,3 @@
     </script>
 </body>
 </html>
-
